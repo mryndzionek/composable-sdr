@@ -79,9 +79,9 @@ parser =
      value DeNo) <*>
   option
     auto
-    (long "squelch" <> short 's' <>
+    (long "agc" <> short 'a' <>
      help
-       "Squelch threshold in [dB]" <>
+       "Enable AGC with squelch threshold in [dB] (0 = no AGC)" <>
      showDefault <>
      value 0.0 <>
      metavar "DOUBLE")
