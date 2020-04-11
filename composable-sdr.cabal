@@ -1,0 +1,39 @@
+cabal-version:       2.4
+
+name:                composable-sdr
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/mryndzionek/composable-sdr
+-- bug-reports:
+license:             BSD-3-Clause
+license-file:        LICENSE
+author:              Mariusz Ryndzionek
+maintainer:          mryndzionek@gmail.com
+copyright:           2020 Ryndzionek Mariusz
+category:            Control, Concurrency, Streaming, Reactivity, Hardware
+extra-source-files:  README.md
+
+library
+  exposed-modules:     ComposableSDR
+  build-depends:       base ^>=4.12, bytestring, mtl, streamly,
+                       hsndfile, exceptions
+  hs-source-dirs:      src
+  include-dirs:        src
+  build-tool-depends:  c2hs:c2hs
+  ghc-options:         -Wall -g
+  default-language:    Haskell2010
+  extra-lib-dirs:      /usr/local/lib
+  extra-libraries:     SoapySDR, liquid
+  default-extensions:  OverloadedStrings, ScopedTypeVariables, FlexibleContexts
+
+executable soapy_sdr
+  main-is:             SoapySDRRec.hs
+  build-depends:       base ^>=4.12, binary, directory,
+                       containers, optparse-applicative,
+                       streamly,
+                       composable-sdr
+  hs-source-dirs:      src
+  ghc-options:         -Wall -g -O2
+  default-language:    Haskell2010
+  default-extensions:  OverloadedStrings, ScopedTypeVariables, FlexibleContexts
