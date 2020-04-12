@@ -28,7 +28,8 @@ data Opts = Opts
   , _outname    :: String
   , _devname    :: String
   , _demod      :: Demod
-  , _squelch    :: Float
+  , _agc        :: Float
+  , _channels   :: Int
   }
 
 parser :: Parser Opts
@@ -73,18 +74,20 @@ parser =
      help "Soapy device/driver name") <*>
   option
     auto
-    (long "demod" <>
-     help "Demodulation type" <>
-     showDefault <>
-     value DeNo) <*>
+    (long "demod" <> help "Demodulation type" <> showDefault <> value DeNo) <*>
   option
     auto
     (long "agc" <> short 'a' <>
-     help
-       "Enable AGC with squelch threshold in [dB] (0 = no AGC)" <>
+     help "Enable AGC with squelch threshold in [dB] (0 = no AGC)" <>
      showDefault <>
      value 0.0 <>
-     metavar "DOUBLE")
+     metavar "DOUBLE") <*>
+  option
+    auto
+    (long "channels" <> short 'c' <> help "Number of channels to split the signal into" <>
+     showDefault <>
+     value 1 <>
+     metavar "INT")
 
 main :: IO ()
 main = run =<< execParser opts
@@ -112,11 +115,17 @@ sdrProcess opts = do
           rs <- CS.resamplerCreate resamp_rate 60.0
           return (S.mapM (CS.resample rs), CS.resamplerDestroy rs)
       agc =
-        if _squelch opts /= 0.0
-          then CS.automaticGainControl (_squelch opts)
+        if _agc opts /= 0.0
+          then CS.automaticGainControl (_agc opts)
           else id
   (resampler, resClean) <- getResampler (_samplerate opts) (_bandwidth opts)
   let prep = CS.takeNArr ns . resampler . CS.readChunks
+      assembleFold sink demod name nc =
+        let sinks = fmap (\n -> demod (sink $ name ++ "_ch" ++ show n)) [1 .. nc]
+         in if nc > 1
+              then CS.firpfbchChannelizer nc $ CS.distribute_ sinks
+              else demod (sink name)
+      nch = _channels opts
       getAudioSink decim fmt =
         let srOut =
               round
@@ -124,18 +133,33 @@ sdrProcess opts = do
                    then _samplerate opts
                    else _bandwidth opts) `div`
               decim
-         in CS.audioFileSink fmt (_outname opts) srOut (_numsamples opts)
+         in CS.audioFileSink fmt (srOut `div` nch) (_numsamples opts)
       runFold fdl = S.fold fdl (prep src)
   case _demod opts of
     DeNo ->
-      let fname = _outname opts ++ ".cf32"
-       in runFold (agc $ CS.fileSink fname)
-    DeNBFM kf fmt -> runFold (agc . CS.fmDemodulator kf $ getAudioSink 1 fmt)
+      runFold
+        (assembleFold (\n -> CS.fileSink $ n ++ ".cf32") agc (_outname opts) nch)
+    DeNBFM kf fmt ->
+      runFold
+        (assembleFold
+           (getAudioSink 1 fmt)
+           (agc . CS.fmDemodulator kf)
+           (_outname opts)
+           nch)
     DeWBFM decim fmt ->
       runFold
-        (agc . CS.wbFMDemodulator (_bandwidth opts) decim $
-         getAudioSink decim fmt)
-    DeAM fmt -> runFold (agc . CS.amDemodulator $ getAudioSink 1 fmt)
+        (assembleFold
+           (getAudioSink decim fmt)
+           (agc . CS.wbFMDemodulator (_bandwidth opts) decim)
+           (_outname opts)
+           nch)
+    DeAM fmt ->
+      runFold
+        (assembleFold
+           (getAudioSink 1 fmt)
+           (agc . CS.amDemodulator)
+           (_outname opts)
+           nch)
   resClean
   CS.closeSource src
 

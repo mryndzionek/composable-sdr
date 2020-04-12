@@ -18,10 +18,12 @@ module ComposableSDR
   , firDecimator
   , automaticGainControl
   , iirFilter
+  , firpfbchChannelizer
   , realToComplex
   , complexToReal
   , takeNArr
   , foldArray
+  , distribute_
   , AudioFormat(..)
   , SamplesIQCF32
   ) where
@@ -42,7 +44,7 @@ import           Control.Monad
 import qualified Control.Monad.Catch                        as MC
 import           Control.Monad.State
 import           Data.Complex
-import           Data.List                                  (foldl')
+import           Data.List                                  (foldl', unfoldr)
 import           Data.Typeable
 
 import           Foreign.ForeignPtr                         (plusForeignPtr,
@@ -193,6 +195,34 @@ takeNArr n = S.map fst . S.takeWhile ((/= 0) . snd) . foldArrL
       if l < A.length a
         then fst $ AT.splitAt l a
         else a
+
+splitterBy ::
+     Storable a => Int -> FL.Fold IO (A.Array a) b -> FL.Fold IO (A.Array a) b
+splitterBy n (FL.Fold step1 start1 done1) = FL.Fold step start done
+  where
+    start = do
+      s <- start1
+      a0 <- AT.newArray 0
+      return (s, a0)
+    done (s, b) = do
+      s' <- step1 s b
+      done1 s'
+    step (s, b) a =
+      let m = (A.length b) + (A.length a)
+       in if m >= n
+            then do
+              ba <- AT.spliceTwo b a
+              (a', b') <-
+                if m == n
+                  then do
+                    a0 <- AT.newArray 0
+                    return (ba, a0)
+                  else return $ AT.splitAt n ba
+              s' <- step1 s a'
+              return (s', b')
+            else do
+              ba <- AT.spliceTwo b a
+              return (s, ba)
 
 {-# INLINABLE fileSink #-}
 fileSink :: (MonadIO m, MC.MonadCatch m, Storable a) => FilePath -> FL.Fold m (A.Array a) ()
@@ -546,11 +576,11 @@ closeAudioFile = SF.hClose
 audioFileSink ::
      (MC.MonadCatch m, MonadIO m, SF.Sample a)
   => AudioFormat
+  -> Int
+  -> Int
   -> String
-  -> Int
-  -> Int
   -> FL.Fold m (A.Array a) ()
-audioFileSink fmt fp sr sn =
+audioFileSink fmt sr sn fp =
   let wav = openAudioFile fmt fp sr sn
    in bracketIO wav closeAudioFile (F.drainBy . writeToAudioFile)
 
@@ -769,9 +799,11 @@ agcExecuteBlock agc px n py = do
       go x y = do
         c_agc_crcf_execute_block agc x 1 y
         s <- c_agc_squelch_crcf_get_status agc
-        _ <- c_agc_crcf_get_rssi agc
+        r <- c_agc_crcf_get_rssi agc
         when (s == 1) (poke y (0 :+ 0)) -- squelch enabled
-  zipWithM_ go xsp ysp
+        return r
+  rs <- zipWithM go xsp ysp
+  print $ (sum rs) / (fromIntegral n)
 
 agcCreate :: Float -> IO Agc
 agcCreate tres = do
@@ -798,3 +830,105 @@ automaticGainControl ::
   -> FL.Fold IO (A.Array SamplesIQCF32) a
   -> FL.Fold IO (A.Array SamplesIQCF32) a
 automaticGainControl tres = liqdCompose (agcCreate tres) agcDestroy agcEx
+
+{#pointer firpfbch_crcf as FirPfbch#}
+
+foreign import ccall unsafe "firpfbch_crcf_create_kaiser" c_firpfbch_crcf_create_kaiser
+  :: CInt -> CUInt -> CUInt -> CFloat -> IO FirPfbch
+
+foreign import ccall unsafe "firpfbch_crcf_print" c_firpfbch_crcf_print
+  :: FirPfbch -> IO ()
+
+foreign import ccall unsafe "firpfbch_crcf_analyzer_execute" c_firpfbch_crcf_analyzer_execute
+  :: FirPfbch -> Ptr SamplesIQCF32 -> Ptr SamplesIQCF32 -> IO ()
+
+foreign import ccall unsafe "firpfbch_crcf_destroy" c_firpfbch_crcf_destroy
+  :: FirPfbch -> IO ()
+
+{#pointer nco_crcf as Nco#}
+
+foreign import ccall unsafe "nco_crcf_create" c_nco_crcf_create
+  :: CInt -> IO Nco
+
+foreign import ccall unsafe "nco_crcf_print" c_nco_crcf_print
+  :: Nco -> IO ()
+
+foreign import ccall unsafe "nco_crcf_set_frequency" c_nco_crcf_set_frequency
+  :: Nco -> CFloat -> IO ()
+
+foreign import ccall unsafe "nco_crcf_mix_block_down" c_nco_crcf_mix_block_down
+  :: Nco -> Ptr SamplesIQCF32 -> Ptr SamplesIQCF32 -> CUInt -> IO ()
+
+foreign import ccall unsafe "nco_crcf_destroy" c_nco_crcf_destroy
+  :: Nco -> IO ()
+
+firpfbchCreate :: Int -> IO (FirPfbch, Nco, Int)
+firpfbchCreate n = do
+  fb <- c_firpfbch_crcf_create_kaiser 0 (fromIntegral n) 7 80.0
+  putStrLn "Using polyphase filterbank channelizer:"
+  c_firpfbch_crcf_print fb
+  nco <- c_nco_crcf_create 1 -- 1 = VCO
+  let offset = -0.5 * (fromIntegral n - 1) / fromIntegral n * 2 * pi
+  c_nco_crcf_set_frequency nco offset
+  putStrLn $ "Offsetting frequency by " ++ show offset ++ " using VCO:"
+  c_nco_crcf_print nco
+  return (fb, nco, n)
+
+firpfbchDestroy :: (FirPfbch, Nco, Int) -> IO ()
+firpfbchDestroy (fb, nco, _) = do
+  c_firpfbch_crcf_destroy fb
+  c_nco_crcf_destroy nco
+
+firpfbchChan ::
+     Storable a
+  => (FirPfbch, Nco, Int)
+  -> A.Array a
+  -> IO [A.Array SamplesIQCF32]
+firpfbchChan (fb, nco, nch) a = do
+  let nx = A.length a
+      nf = nx `div` nch
+      x = castPtr . unsafeForeignPtrToPtr $ AT.aStart a
+      process s d i =
+        allocaArray nch $ \tmp -> do
+          let src = s `advancePtr` (nch * i)
+              move j = do
+                v <- peek (tmp `advancePtr` j)
+                poke (d `advancePtr` ((nf * j) + i)) v
+          c_firpfbch_crcf_analyzer_execute fb src tmp
+          sequence_ [move j | j <- [0 .. nch - 1]]
+  fy <- mallocPlainForeignPtrBytes (8 * nx)
+  allocaArray nx $ \dx -> do
+    c_nco_crcf_mix_block_down nco x dx (fromIntegral nx)
+    withForeignPtr fy $ \y -> do
+      sequence_ [process dx y i | i <- [0 .. nf - 1]]
+      let v =
+            AT.Array
+              { AT.aStart = fy
+              , AT.aEnd = y `plusPtr` (8 * nx)
+              , AT.aBound = y `plusPtr` (8 * nx)
+              }
+          go as = do
+            as' <- as
+            if A.length as' == nf
+              then return (as', Nothing)
+              else let (as'', bs) = AT.splitAt nf as'
+                    in return (as'', Just bs)
+      return $ unfoldr go (Just v)
+
+firpfbchChannelizer ::
+     Int
+  -> FL.Fold IO [A.Array SamplesIQCF32] a
+  -> FL.Fold IO (A.Array SamplesIQCF32) a
+firpfbchChannelizer n =
+  splitterBy (n * 16 * 1024) .
+  liqdCompose (firpfbchCreate n) firpfbchDestroy firpfbchChan
+
+distribute_ :: MonadIO m => [FL.Fold m a b] -> FL.Fold m [a] ()
+distribute_ fs = FL.Fold step initial extract
+  where
+    initial =
+      mapM (\(FL.Fold s i e) -> i >>= \r -> return (FL.Fold s (return r) e)) fs
+    step ss as = do
+      zipWithM_ (\(FL.Fold s i _) a -> i >>= \r -> void (s r a)) ss as
+      return ss
+    extract = mapM_ (\(FL.Fold _ i e) -> i >>= \r -> e r)

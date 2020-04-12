@@ -46,7 +46,7 @@ LoRa on 868MHz
 
 ![spectrum3](images/inspectrum3.png)
 
-#### Example
+#### Example 1
 
 Let's first check using [CubicSDR](https://cubicsdr.com/) if there are any signals within FM radio band (88-108MHz).
 
@@ -81,6 +81,16 @@ to get 48kHz output WAV file:
 ```sh
 cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeWBFM 4 WAV"
 ```
+
+#### Example 2
+
+To run as a [PMR446](https://en.wikipedia.org/wiki/PMR446) scanner:
+
+```sh
+cabal v2-run -- soapy_sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40
+```
+
+This will output 16 WAV files, each for one PMR channel.
 
 ## TODO
   - [ ] add live playback via PulseAudio
