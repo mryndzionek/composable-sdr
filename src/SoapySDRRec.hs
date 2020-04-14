@@ -121,10 +121,12 @@ sdrProcess opts = do
   (resampler, resClean) <- getResampler (_samplerate opts) (_bandwidth opts)
   let prep = CS.takeNArr ns . resampler . CS.readChunks
       assembleFold sink demod name nc =
-        let sinks = fmap (\n -> demod (sink $ name ++ "_ch" ++ show n)) [1 .. nc]
-         in if nc > 1
-              then CS.firpfbchChannelizer nc $ CS.distribute_ sinks
-              else demod (sink name)
+        let sinks =
+              fmap (\n -> demod (sink $ name ++ "_ch" ++ show n)) [1 .. nc]
+         in CS.dcBlocker
+              (if nc > 1
+                 then CS.firpfbchChannelizer nc $ CS.distribute_ sinks
+                 else demod $ (sink name))
       nch = _channels opts
       getAudioSink decim fmt =
         let srOut =

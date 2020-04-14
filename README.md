@@ -42,6 +42,10 @@ Some captures from ISM 433MHz
 ![spectrum1](images/inspectrum1.png)
 ![spectrum2](images/inspectrum2.png)
 
+AGC with squelch enabled
+
+![spectrum4](images/inspectrum4.png)
+
 LoRa on 868MHz
 
 ![spectrum3](images/inspectrum3.png)

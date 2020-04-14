@@ -18,6 +18,7 @@ module ComposableSDR
   , firDecimator
   , automaticGainControl
   , iirFilter
+  , dcBlocker
   , firpfbchChannelizer
   , realToComplex
   , complexToReal
@@ -105,6 +106,10 @@ data AudioFormat
   | WAV
   deriving (Show, Read)
 
+type Processor m a b c = FL.Fold m b c -> FL.Fold m a c
+type ArrayProcessor m a b c = Processor m (A.Array a) (A.Array b) c
+type Demodulator m c = ArrayProcessor m SamplesIQCF32 Float c
+
 data SoapySource = SoapySource
   { _dev      :: Ptr SoapySDRDevice
   , _stream   :: Ptr SoapySDRStream
@@ -118,8 +123,8 @@ sampleFormat = "CF32"
 
 type SamplesIQCF32 = Complex CFloat
 
-try :: (Num a, Ord a) => IO a -> IO ()
-try a = a >>= (\s -> when (s < 0) $ throwIO SoapyException)
+try :: (MonadIO m, Num a, Ord a) => m a -> m ()
+try a = a >>= (\s -> when (s < 0) $ liftIO $ throwIO SoapyException)
 
 {#pointer *SoapySDRKwargs as SoapySDRKwargs#}
 
@@ -196,8 +201,7 @@ takeNArr n = S.map fst . S.takeWhile ((/= 0) . snd) . foldArrL
         then fst $ AT.splitAt l a
         else a
 
-splitterBy ::
-     Storable a => Int -> FL.Fold IO (A.Array a) b -> FL.Fold IO (A.Array a) b
+splitterBy :: Storable a => Int -> ArrayProcessor IO a a b
 splitterBy n (FL.Fold step1 start1 done1) = FL.Fold step start done
   where
     start = do
@@ -208,7 +212,7 @@ splitterBy n (FL.Fold step1 start1 done1) = FL.Fold step start done
       s' <- step1 s b
       done1 s'
     step (s, b) a =
-      let m = (A.length b) + (A.length a)
+      let m = A.length b + A.length a
        in if m >= n
             then do
               ba <- AT.spliceTwo b a
@@ -447,14 +451,14 @@ resamplerDestroy r
   | r == nullPtr = return ()
   | otherwise = c_msresamp_crcf_destroy r
 
-liqdCompose ::
+toProcessor ::
      MonadIO m
   => m r
   -> (r -> m ())
   -> (r -> a -> m b)
   -> FL.Fold m b c
   -> FL.Fold m a c
-liqdCompose bef aft bet (FL.Fold step1 start1 done1) = FL.Fold step start done
+toProcessor bef aft bet (FL.Fold step1 start1 done1) = FL.Fold step start done
   where
     start = do
       s <- start1
@@ -517,11 +521,8 @@ fmDemod d a =
 fmdemodDestroy :: FreqDem -> IO ()
 fmdemodDestroy = c_freqdem_crcf_destroy
 
-fmDemodulator ::
-     Float
-  -> FL.Fold IO (A.Array Float) a
-  -> FL.Fold IO (A.Array SamplesIQCF32) a
-fmDemodulator kf = liqdCompose (fmdemodCreate kf) fmdemodDestroy fmDemod
+fmDemodulator :: Float -> Demodulator IO a
+fmDemodulator kf = toProcessor (fmdemodCreate kf) fmdemodDestroy fmDemod
 
 {#pointer ampmodem as AmpDem#}
 
@@ -552,9 +553,8 @@ amDemod d a =
 amdemodDestroy :: AmpDem -> IO ()
 amdemodDestroy = c_ampmodem_destroy
 
-amDemodulator ::
-     FL.Fold IO (A.Array Float) a -> FL.Fold IO (A.Array SamplesIQCF32) a
-amDemodulator = liqdCompose amdemodCreate amdemodDestroy amDemod
+amDemodulator :: Demodulator IO a
+amDemodulator = toProcessor amdemodCreate amdemodDestroy amDemod
 
 openAudioFile :: AudioFormat -> FilePath -> Int -> Int -> IO SF.Handle
 openAudioFile fmt fp sr sn = SF.openFile (fp ++ ext) SF.WriteMode info
@@ -635,9 +635,8 @@ firDecim m f a =
   let n = fromIntegral (A.length a) `div` m
    in wrap n (4 * n) (c_firdecim_rrrf_execute_block f) a
 
-firDecimator ::
-     Int -> FL.Fold IO (A.Array Float) a -> FL.Fold IO (A.Array Float) a
-firDecimator m = liqdCompose (firdecimCreate m) firdecimDestroy (firDecim m)
+firDecimator :: Int -> ArrayProcessor IO Float Float a
+firDecimator m = toProcessor (firdecimCreate m) firdecimDestroy (firDecim m)
 
 {#pointer firhilbf as FirHilb#}
 
@@ -672,9 +671,8 @@ firhilbDecim f a =
   let n = fromIntegral (A.length a) `div` 2
    in wrap n (n * 8) (c_firhilbf_decim_execute_block f) a
 
-realToComplex ::
-     FL.Fold IO (A.Array SamplesIQCF32) a -> FL.Fold IO (A.Array Float) a
-realToComplex = liqdCompose firhilbCreate firhilbDestroy firhilbDecim
+realToComplex :: ArrayProcessor IO Float SamplesIQCF32 a
+realToComplex = toProcessor firhilbCreate firhilbDestroy firhilbDecim
 
 firhilbInterp ::
      MonadIO m => FirHilb -> A.Array SamplesIQCF32 -> m (A.Array Float)
@@ -682,9 +680,22 @@ firhilbInterp f a =
   let n = (fromIntegral $ A.length a)
    in wrap n (2 * 4 * n) (c_firhilbf_interp_execute_block f) a
 
-complexToReal ::
-     FL.Fold IO (A.Array Float) a -> FL.Fold IO (A.Array SamplesIQCF32) a
-complexToReal = liqdCompose firhilbCreate firhilbDestroy firhilbInterp
+complexToReal :: ArrayProcessor IO SamplesIQCF32 Float a
+complexToReal = toProcessor firhilbCreate firhilbDestroy firhilbInterp
+
+{#pointer iirfilt_crcf as IirFiltC#}
+
+foreign import ccall unsafe "iirfilt_crcf_create_dc_blocker" c_iirfilt_crcf_create_dc_blocker
+  :: CFloat -> IO IirFiltC
+
+foreign import ccall unsafe "iirfilt_crcf_print" c_iirfilt_crcf_print
+  :: IirFiltC -> IO ()
+
+foreign import ccall unsafe "iirfilt_crcf_execute_block" c_iirfilt_crcf_execute_block
+  :: IirFiltC -> Ptr SamplesIQCF32 -> CUInt -> Ptr SamplesIQCF32 -> IO ()
+
+foreign import ccall unsafe "iirfilt_crcf_destroy" c_iirfilt_crcf_destroy
+  :: IirFiltC -> IO ()
 
 {#pointer iirfilt_rrrf as IirFilt#}
 
@@ -725,12 +736,27 @@ iirFilt f a =
   let n = (fromIntegral $ A.length a)
    in wrap n (4 * n) (c_iirfilt_rrrf_execute_block f) a
 
-iirFilter ::
-     [Float]
-  -> [Float]
-  -> FL.Fold IO (A.Array Float) a
-  -> FL.Fold IO (A.Array Float) a
-iirFilter bt at = liqdCompose (iirfiltCreate bt at) iirfiltDestroy iirFilt
+iirFilter :: [Float] -> [Float] -> ArrayProcessor IO Float Float a
+iirFilter bt at = toProcessor (iirfiltCreate bt at) iirfiltDestroy iirFilt
+
+dcBlockerCreate :: IO IirFiltC
+dcBlockerCreate = do
+  dc <- c_iirfilt_crcf_create_dc_blocker 0.0005
+  putStrLn "Using DC blocker:"
+  c_iirfilt_crcf_print dc
+  return dc
+
+iirCFilt ::
+     MonadIO m => IirFiltC -> A.Array SamplesIQCF32 -> m (A.Array SamplesIQCF32)
+iirCFilt f a =
+  let n = (fromIntegral $ A.length a)
+   in wrap n (8 * n) (c_iirfilt_crcf_execute_block f) a
+
+dcBlocker :: ArrayProcessor IO SamplesIQCF32 SamplesIQCF32 a
+dcBlocker = toProcessor dcBlockerCreate iirfiltCDestroy iirCFilt
+
+iirfiltCDestroy :: IirFiltC -> IO ()
+iirfiltCDestroy = c_iirfilt_crcf_destroy
 
 -- This is mostly taken from GNU Radio
 fmDeemphTaps :: Double -> ([Float], [Float])
@@ -746,11 +772,7 @@ fmDeemphTaps fs =
       ataps = realToFrac <$> [1.0, -p1]
    in (btaps, ataps)
 
-wbFMDemodulator ::
-     Double
-  -> Int
-  -> FL.Fold IO (A.Array Float) a
-  -> FL.Fold IO (A.Array SamplesIQCF32) a
+wbFMDemodulator :: Double -> Int -> Demodulator IO a
 wbFMDemodulator quadRate decim =
   let (dbt, dat) = fmDeemphTaps (quadRate / fromIntegral decim)
    in fmDemodulator 0.6 . iirFilter dbt dat . firDecimator decim
@@ -799,11 +821,9 @@ agcExecuteBlock agc px n py = do
       go x y = do
         c_agc_crcf_execute_block agc x 1 y
         s <- c_agc_squelch_crcf_get_status agc
-        r <- c_agc_crcf_get_rssi agc
+        _ <- c_agc_crcf_get_rssi agc
         when (s == 1) (poke y (0 :+ 0)) -- squelch enabled
-        return r
-  rs <- zipWithM go xsp ysp
-  print $ (sum rs) / (fromIntegral n)
+  zipWithM_ go xsp ysp
 
 agcCreate :: Float -> IO Agc
 agcCreate tres = do
@@ -825,11 +845,8 @@ agcEx agc a =
   let n = (fromIntegral $ A.length a)
    in wrap n (8 * n) (agcExecuteBlock agc) a
 
-automaticGainControl ::
-     Float
-  -> FL.Fold IO (A.Array SamplesIQCF32) a
-  -> FL.Fold IO (A.Array SamplesIQCF32) a
-automaticGainControl tres = liqdCompose (agcCreate tres) agcDestroy agcEx
+automaticGainControl :: Float -> ArrayProcessor IO SamplesIQCF32 SamplesIQCF32 a
+automaticGainControl tres = toProcessor (agcCreate tres) agcDestroy agcEx
 
 {#pointer firpfbch_crcf as FirPfbch#}
 
@@ -916,12 +933,10 @@ firpfbchChan (fb, nco, nch) a = do
       return $ unfoldr go (Just v)
 
 firpfbchChannelizer ::
-     Int
-  -> FL.Fold IO [A.Array SamplesIQCF32] a
-  -> FL.Fold IO (A.Array SamplesIQCF32) a
+     Int -> Processor IO (A.Array SamplesIQCF32) [A.Array SamplesIQCF32] a
 firpfbchChannelizer n =
-  splitterBy (n * 16 * 1024) .
-  liqdCompose (firpfbchCreate n) firpfbchDestroy firpfbchChan
+  splitterBy (n * 8 * 1024) .
+  toProcessor (firpfbchCreate n) firpfbchDestroy firpfbchChan
 
 distribute_ :: MonadIO m => [FL.Fold m a b] -> FL.Fold m [a] ()
 distribute_ fs = FL.Fold step initial extract
