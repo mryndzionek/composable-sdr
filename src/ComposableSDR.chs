@@ -25,6 +25,7 @@ module ComposableSDR
   , takeNArr
   , foldArray
   , distribute_
+  , mix
   , AudioFormat(..)
   , SamplesIQCF32
   ) where
@@ -947,3 +948,8 @@ distribute_ fs = FL.Fold step initial extract
       zipWithM_ (\(FL.Fold s i _) a -> i >>= \r -> void (s r a)) ss as
       return ss
     extract = mapM_ (\(FL.Fold _ i e) -> i >>= \r -> e r)
+
+mix :: (MonadIO m, Num a, Storable a) => Processor m [A.Array a] (A.Array a) b
+mix =
+  let f a1 a2 = A.fromList $ zipWith (+) (A.toList a1) (A.toList a2)
+   in FL.lmap (foldl1 f)
