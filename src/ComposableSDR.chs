@@ -29,6 +29,7 @@ module ComposableSDR
   , foldArray
   , distribute_
   , mix
+  , mux
   , addPipe
   , compact
   , AudioFormat(..)
@@ -87,7 +88,11 @@ data SoapyException =
   SoapyException
   deriving (Show, Typeable)
 
-data Pipe m a b = forall r. Pipe (m r) (r -> a -> m b) (r -> m ())
+data Pipe m a b = forall r. Pipe 
+  { _start :: m r
+  , _process :: r -> a -> m b
+  , _done :: r -> m ()
+  }
 
 compose :: Monad m => Pipe m b c -> Pipe m a b -> Pipe m a c
 compose (Pipe start1 process1 done1) (Pipe start2 process2 done2) =
@@ -971,3 +976,12 @@ mix :: (MonadIO m, Num a, Storable a) => Pipe m [A.Array a] (A.Array a)
 mix =
   let f a1 a2 = A.fromList $ zipWith (+) (A.toList a1) (A.toList a2)
    in foldl1 f <$> Control.Category.id
+
+mux :: Monad m => [Pipe m a b] -> Pipe m [a] [b]
+mux ps = Pipe start process done
+  where
+    start = mapM (\(Pipe s p d) -> s >>= \r -> return (Pipe (return r) p d)) ps
+    process = zipWithM (\(Pipe s p _) a -> s >>= \r -> p r a)
+    done = mapM_ (\(Pipe s _ d) -> s >>= \r -> d r)
+
+
