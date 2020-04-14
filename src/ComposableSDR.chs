@@ -1,4 +1,7 @@
-{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleInstances         #-}
+{-# LANGUAGE MultiParamTypeClasses     #-}
+
 module ComposableSDR
   ( enumerate
   , fileSink
@@ -26,6 +29,8 @@ module ComposableSDR
   , foldArray
   , distribute_
   , mix
+  , addPipe
+  , compact
   , AudioFormat(..)
   , SamplesIQCF32
   ) where
@@ -37,10 +42,12 @@ module ComposableSDR
 import           Foreign.C.String
 import           Foreign.C.Types
 import           Foreign.Marshal.Alloc
-import           Foreign.Marshal.Array                      hiding (newArray)
+import           Foreign.Marshal.Array hiding (newArray)
 import           Foreign.Ptr
 import           Foreign.Storable
+import           Prelude               hiding ((.))
 
+import           Control.Category                           (Category (..))
 import           Control.Exception                          (Exception, throwIO)
 import           Control.Monad
 import qualified Control.Monad.Catch                        as MC
@@ -80,6 +87,24 @@ data SoapyException =
   SoapyException
   deriving (Show, Typeable)
 
+data Pipe m a b = forall r. Pipe (m r) (r -> a -> m b) (r -> m ())
+
+compose :: Monad m => Pipe m b c -> Pipe m a b -> Pipe m a c
+compose (Pipe start1 process1 done1) (Pipe start2 process2 done2) =
+  Pipe start process done
+  where
+    start = (,) <$> start1 <*> start2
+    done (r1, r2) = done2 r2 >> done1 r1
+    process (r1, r2) = process2 r2 >=> process1 r1
+
+instance Monad m => Category (Pipe m) where
+  id = Pipe (return ()) (const return) (const $ return ())
+  (.) = compose
+
+instance Monad m => Functor (Pipe m a) where
+  fmap f (Pipe start process done) =
+    Pipe start (\r a -> fmap f (process r a)) done
+
 instance Exception SoapyException
 
 newtype Array a = Array
@@ -107,9 +132,8 @@ data AudioFormat
   | WAV
   deriving (Show, Read)
 
-type Processor m a b c = FL.Fold m b c -> FL.Fold m a c
-type ArrayProcessor m a b c = Processor m (A.Array a) (A.Array b) c
-type Demodulator m c = ArrayProcessor m SamplesIQCF32 Float c
+type ArrayPipe m a b = Pipe m (A.Array a) (A.Array b)
+type Demodulator = ArrayPipe IO SamplesIQCF32 Float
 
 data SoapySource = SoapySource
   { _dev      :: Ptr SoapySDRDevice
@@ -202,8 +226,9 @@ takeNArr n = S.map fst . S.takeWhile ((/= 0) . snd) . foldArrL
         then fst $ AT.splitAt l a
         else a
 
-splitterBy :: Storable a => Int -> ArrayProcessor IO a a b
-splitterBy n (FL.Fold step1 start1 done1) = FL.Fold step start done
+compact ::
+     Storable a => Int -> FL.Fold IO (A.Array a) b -> FL.Fold IO (A.Array a) b
+compact n (FL.Fold step1 start1 done1) = FL.Fold step start done
   where
     start = do
       s <- start1
@@ -299,7 +324,6 @@ createSoapyDevice dn sr freq gain = do
         then return ()
         else throwIO SoapyException
   return dev
-
 
 {#pointer *SoapySDRStream as SoapySDRStream#}
 
@@ -413,6 +437,7 @@ foreign import ccall unsafe "msresamp_crcf_execute" c_msresamp_crcf_execute
 foreign import ccall unsafe "msresamp_crcf_destroy" c_msresamp_crcf_destroy
   :: MsResampCrcf -> IO ()
 
+-- TODO see if changing this into a Pipe gets us somewhere
 resample :: (MonadIO m) => MsResampCrcf -> AT.Array SamplesIQCF32 -> m (AT.Array SamplesIQCF32)
 resample rs x =
   liftIO $ do
@@ -452,21 +477,16 @@ resamplerDestroy r
   | r == nullPtr = return ()
   | otherwise = c_msresamp_crcf_destroy r
 
-toProcessor ::
-     MonadIO m
-  => m r
-  -> (r -> m ())
-  -> (r -> a -> m b)
-  -> FL.Fold m b c
-  -> FL.Fold m a c
-toProcessor bef aft bet (FL.Fold step1 start1 done1) = FL.Fold step start done
+addPipe :: MonadIO m => Pipe m a b -> FL.Fold m b c -> FL.Fold m a c
+addPipe (Pipe creat process dest) (FL.Fold step1 start1 done1) =
+  FL.Fold step start done
   where
     start = do
       s <- start1
-      r <- bef
-      return (s, r, bet r)
+      r <- creat
+      return (s, r, process r)
     done (s, r, _) = do
-      aft r
+      dest r
       done1 s
     step (s, r, f) a = do
       b <- f a
@@ -522,8 +542,8 @@ fmDemod d a =
 fmdemodDestroy :: FreqDem -> IO ()
 fmdemodDestroy = c_freqdem_crcf_destroy
 
-fmDemodulator :: Float -> Demodulator IO a
-fmDemodulator kf = toProcessor (fmdemodCreate kf) fmdemodDestroy fmDemod
+fmDemodulator :: Float -> Demodulator 
+fmDemodulator kf = Pipe (fmdemodCreate kf) fmDemod fmdemodDestroy
 
 {#pointer ampmodem as AmpDem#}
 
@@ -554,8 +574,8 @@ amDemod d a =
 amdemodDestroy :: AmpDem -> IO ()
 amdemodDestroy = c_ampmodem_destroy
 
-amDemodulator :: Demodulator IO a
-amDemodulator = toProcessor amdemodCreate amdemodDestroy amDemod
+amDemodulator :: Demodulator
+amDemodulator = Pipe amdemodCreate amDemod amdemodDestroy
 
 openAudioFile :: AudioFormat -> FilePath -> Int -> Int -> IO SF.Handle
 openAudioFile fmt fp sr sn = SF.openFile (fp ++ ext) SF.WriteMode info
@@ -636,8 +656,8 @@ firDecim m f a =
   let n = fromIntegral (A.length a) `div` m
    in wrap n (4 * n) (c_firdecim_rrrf_execute_block f) a
 
-firDecimator :: Int -> ArrayProcessor IO Float Float a
-firDecimator m = toProcessor (firdecimCreate m) firdecimDestroy (firDecim m)
+firDecimator :: Int -> ArrayPipe IO Float Float
+firDecimator m = Pipe (firdecimCreate m) (firDecim m) firdecimDestroy
 
 {#pointer firhilbf as FirHilb#}
 
@@ -672,8 +692,8 @@ firhilbDecim f a =
   let n = fromIntegral (A.length a) `div` 2
    in wrap n (n * 8) (c_firhilbf_decim_execute_block f) a
 
-realToComplex :: ArrayProcessor IO Float SamplesIQCF32 a
-realToComplex = toProcessor firhilbCreate firhilbDestroy firhilbDecim
+realToComplex :: ArrayPipe IO Float SamplesIQCF32
+realToComplex = Pipe firhilbCreate firhilbDecim firhilbDestroy 
 
 firhilbInterp ::
      MonadIO m => FirHilb -> A.Array SamplesIQCF32 -> m (A.Array Float)
@@ -681,8 +701,8 @@ firhilbInterp f a =
   let n = (fromIntegral $ A.length a)
    in wrap n (2 * 4 * n) (c_firhilbf_interp_execute_block f) a
 
-complexToReal :: ArrayProcessor IO SamplesIQCF32 Float a
-complexToReal = toProcessor firhilbCreate firhilbDestroy firhilbInterp
+complexToReal :: ArrayPipe IO SamplesIQCF32 Float
+complexToReal = Pipe firhilbCreate firhilbInterp firhilbDestroy
 
 {#pointer iirfilt_crcf as IirFiltC#}
 
@@ -737,8 +757,8 @@ iirFilt f a =
   let n = (fromIntegral $ A.length a)
    in wrap n (4 * n) (c_iirfilt_rrrf_execute_block f) a
 
-iirFilter :: [Float] -> [Float] -> ArrayProcessor IO Float Float a
-iirFilter bt at = toProcessor (iirfiltCreate bt at) iirfiltDestroy iirFilt
+iirFilter :: [Float] -> [Float] -> ArrayPipe IO Float Float
+iirFilter bt at = Pipe (iirfiltCreate bt at) iirFilt iirfiltDestroy
 
 dcBlockerCreate :: IO IirFiltC
 dcBlockerCreate = do
@@ -753,8 +773,8 @@ iirCFilt f a =
   let n = (fromIntegral $ A.length a)
    in wrap n (8 * n) (c_iirfilt_crcf_execute_block f) a
 
-dcBlocker :: ArrayProcessor IO SamplesIQCF32 SamplesIQCF32 a
-dcBlocker = toProcessor dcBlockerCreate iirfiltCDestroy iirCFilt
+dcBlocker :: ArrayPipe IO SamplesIQCF32 SamplesIQCF32
+dcBlocker = Pipe dcBlockerCreate iirCFilt iirfiltCDestroy
 
 iirfiltCDestroy :: IirFiltC -> IO ()
 iirfiltCDestroy = c_iirfilt_crcf_destroy
@@ -773,10 +793,10 @@ fmDeemphTaps fs =
       ataps = realToFrac <$> [1.0, -p1]
    in (btaps, ataps)
 
-wbFMDemodulator :: Double -> Int -> Demodulator IO a
+wbFMDemodulator :: Double -> Int -> Demodulator
 wbFMDemodulator quadRate decim =
   let (dbt, dat) = fmDeemphTaps (quadRate / fromIntegral decim)
-   in fmDemodulator 0.6 . iirFilter dbt dat . firDecimator decim
+   in firDecimator decim . iirFilter dbt dat . fmDemodulator 0.6
 
 {#pointer agc_crcf as Agc#}
 
@@ -846,8 +866,8 @@ agcEx agc a =
   let n = (fromIntegral $ A.length a)
    in wrap n (8 * n) (agcExecuteBlock agc) a
 
-automaticGainControl :: Float -> ArrayProcessor IO SamplesIQCF32 SamplesIQCF32 a
-automaticGainControl tres = toProcessor (agcCreate tres) agcDestroy agcEx
+automaticGainControl :: Float -> ArrayPipe IO SamplesIQCF32 SamplesIQCF32
+automaticGainControl tres = Pipe (agcCreate tres) agcEx agcDestroy
 
 {#pointer firpfbch_crcf as FirPfbch#}
 
@@ -934,10 +954,8 @@ firpfbchChan (fb, nco, nch) a = do
       return $ unfoldr go (Just v)
 
 firpfbchChannelizer ::
-     Int -> Processor IO (A.Array SamplesIQCF32) [A.Array SamplesIQCF32] a
-firpfbchChannelizer n =
-  splitterBy (n * 8 * 1024) .
-  toProcessor (firpfbchCreate n) firpfbchDestroy firpfbchChan
+     Int -> Pipe IO (A.Array SamplesIQCF32) [A.Array SamplesIQCF32]
+firpfbchChannelizer n = Pipe (firpfbchCreate n) firpfbchChan firpfbchDestroy
 
 distribute_ :: MonadIO m => [FL.Fold m a b] -> FL.Fold m [a] ()
 distribute_ fs = FL.Fold step initial extract
@@ -949,7 +967,7 @@ distribute_ fs = FL.Fold step initial extract
       return ss
     extract = mapM_ (\(FL.Fold _ i e) -> i >>= \r -> e r)
 
-mix :: (MonadIO m, Num a, Storable a) => Processor m [A.Array a] (A.Array a) b
+mix :: (MonadIO m, Num a, Storable a) => Pipe m [A.Array a] (A.Array a)
 mix =
   let f a1 a2 = A.fromList $ zipWith (+) (A.toList a1) (A.toList a2)
-   in FL.lmap (foldl1 f)
+   in foldl1 f <$> Control.Category.id

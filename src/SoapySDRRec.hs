@@ -1,14 +1,16 @@
 module Main where
 
-import qualified Data.Map                             as M
-import           Data.Maybe                           (mapMaybe)
-import           Data.Semigroup                       ((<>))
+import qualified Data.Map            as M
+import           Data.Maybe          (mapMaybe)
+import           Data.Semigroup      ((<>))
 
+import           Control.Category    (Category (..))
 import           Options.Applicative
+import           Prelude             hiding ((.))
 
-import qualified ComposableSDR                        as CS
+import qualified ComposableSDR       as CS
 
-import qualified Streamly.Prelude                     as S
+import qualified Streamly.Prelude    as S
 
 data Demod
   = DeNo
@@ -109,7 +111,7 @@ sdrProcess opts = do
       (_gain opts)
   let ns = fromIntegral $ _numsamples opts
       getResampler sr bw
-        | bw == 0 = return (id, pure ())
+        | bw == 0 = return (Prelude.id, pure ())
         | otherwise = do
           let resamp_rate = realToFrac (bw / sr)
           rs <- CS.resamplerCreate resamp_rate 60.0
@@ -117,16 +119,22 @@ sdrProcess opts = do
       agc =
         if _agc opts /= 0.0
           then CS.automaticGainControl (_agc opts)
-          else id
+          else Control.Category.id
   (resampler, resClean) <- getResampler (_samplerate opts) (_bandwidth opts)
   let prep = CS.takeNArr ns . resampler . CS.readChunks
       assembleFold sink demod name nc =
         let sinks =
-              fmap (\n -> demod (sink $ name ++ "_ch" ++ show n)) [1 .. nc]
-         in CS.dcBlocker
+              fmap
+                (\n -> CS.addPipe demod (sink $ name ++ "_ch" ++ show n))
+                [1 .. nc]
+         in CS.addPipe
+              CS.dcBlocker
               (if nc > 1
-                 then CS.firpfbchChannelizer nc $ CS.distribute_ sinks
-                 else demod $ (sink name))
+                 then CS.compact (nch * 8 * 1024) $
+                      CS.addPipe
+                        (CS.firpfbchChannelizer nc)
+                        (CS.distribute_ sinks)
+                 else CS.addPipe demod (sink name))
       nch = _channels opts
       getAudioSink decim fmt =
         let srOut =
@@ -145,21 +153,21 @@ sdrProcess opts = do
       runFold
         (assembleFold
            (getAudioSink 1 fmt)
-           (agc . CS.fmDemodulator kf)
+           (CS.fmDemodulator kf . agc)
            (_outname opts)
            nch)
     DeWBFM decim fmt ->
       runFold
         (assembleFold
            (getAudioSink decim fmt)
-           (agc . CS.wbFMDemodulator (_bandwidth opts) decim)
+           (CS.wbFMDemodulator (_bandwidth opts) decim . agc)
            (_outname opts)
            nch)
     DeAM fmt ->
       runFold
         (assembleFold
            (getAudioSink 1 fmt)
-           (agc . CS.amDemodulator)
+           (CS.amDemodulator . agc)
            (_outname opts)
            nch)
   resClean
