@@ -13,7 +13,11 @@ The idea is to use C/C++ interop to 'lift' low-level APIs to streams and folds i
 The hope is to create a framework in which efficient DSP is possible and without sacrificing
 code quality even for complex signal processing flows.
 
-## Depenedencies
+This repo will stay fairly low-level. The applications built using provided processing blocks
+should be lean and mean, so that it's possible to deploy them on even not-so-powerful, embedded,
+headless systems. All the UI interaction stuff can be done via sockets.
+
+## Dependencies
 
  - [SoapySDR](https://github.com/pothosware/SoapySDR)
  - SoapySDR module(s) like [SoapyRTLSDR](https://github.com/pothosware/SoapyRTLSDR)
@@ -79,6 +83,10 @@ between 23kHz and 53kHz and RDBS around 57kHz.
 
 ![ex1_3](images/ex1_3.png)
 
+The same in baudline:
+
+![ex1_4](images/ex1_4.png)
+
 Alright, let's now do proper wide band FM (mono) demodulation with de-emphasis, resampled rate of 192k and output decimation of 4,
 to get 48kHz output WAV file:
 
@@ -94,13 +102,13 @@ To run as a [PMR446](https://en.wikipedia.org/wiki/PMR446) scanner:
 cabal v2-run -- soapy_sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40
 ```
 
-This will output 16 WAV files, each for one PMR channel.
+This will output 16 WAV files, each for one PMR channel. To merge all the files into one `-m` flag can be used:
+There is also AGC with squelch (`-a` option), but needs more testing and adding auto mode.
 
 ## TODO
   - [ ] add live playback via PulseAudio
   - [ ] add RF protocol decoders
   - [ ] profile flows and introduce concurrency modifiers (`aheadly`, etc.)
-  - [ ] implement an app for PMR446 using [firpfbch](https://github.com/jgaeddert/liquid-dsp/blob/master/examples/firpfbch_crcf_example.c)
   - [ ] do some tests regarding DAB+
   - [ ] use [static-haskell-nix](https://github.com/nh2/static-haskell-nix) to build standalone executables
   - [ ] Template Haskell boilerplate code generator for Liquid-DSP blocks
