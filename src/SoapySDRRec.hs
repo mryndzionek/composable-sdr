@@ -32,6 +32,7 @@ data Opts = Opts
   , _demod      :: Demod
   , _agc        :: Float
   , _channels   :: Int
+  , _mix        :: Bool
   }
 
 parser :: Parser Opts
@@ -86,10 +87,16 @@ parser =
      metavar "DOUBLE") <*>
   option
     auto
-    (long "channels" <> short 'c' <> help "Number of channels to split the signal into" <>
+    (long "channels" <> short 'c' <>
+     help "Number of channels to split the signal into" <>
      showDefault <>
      value 1 <>
-     metavar "INT")
+     metavar "INT") <*>
+  switch
+    (long "mix" <> short 'm' <>
+     help
+       "Instead of outputting separate file for each channel, mix them into one" <>
+     showDefault)
 
 main :: IO ()
 main = run =<< execParser opts
@@ -131,9 +138,15 @@ sdrProcess opts = do
               CS.dcBlocker
               (if nc > 1
                  then CS.compact (nch * 8 * 1024) $
-                      CS.addPipe
-                        (CS.firpfbchChannelizer nc)
-                        (CS.distribute_ sinks)
+                      if _mix opts
+                        then CS.addPipe
+                               (CS.mix .
+                                CS.mux (replicate nch demod) .
+                                CS.firpfbchChannelizer nc)
+                               (sink name)
+                        else CS.addPipe
+                               (CS.firpfbchChannelizer nc)
+                               (CS.distribute_ sinks)
                  else CS.addPipe demod (sink name))
       nch = _channels opts
       getAudioSink decim fmt =
