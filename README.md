@@ -105,6 +105,22 @@ cabal v2-run -- soapy_sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod
 This will output 16 WAV files, each for one PMR channel. To merge all the files into one `-m` flag can be used:
 There is also AGC with squelch (`-a` option), but needs more testing and adding auto mode.
 
+#### Example 3
+
+Just a general demonstration of precision and efficiency. We're switching the SDR to 3.2MSPS.
+Then resample the signal to 1.6MSPS and channelize to 20 channels, writing to 20 separate files.
+We request 16M sample (after resampling), so around 10s of recording:
+
+```sh
+time cabal v2-run -- soapy_sdr -n 16000000 -f 433.9e6 -s 3.2e6 -b 1.6e6 --demod "DeNo" -g 35 -a -50 -c 20
+```
+
+Below is a GIF showing how the files are written and CPU utilization. No samples are lost and each file
+ends up 6400000 bytes long. One CF32 sample is 8 bytes, so at 3.2MSPS we're capturing around 24MB/s.
+Then processing it and saving around 122MB in 10 seconds.
+
+![ex1_5](images/ex1_5.gif)
+
 ## TODO
   - [ ] add live playback via PulseAudio
   - [ ] add RF protocol decoders
