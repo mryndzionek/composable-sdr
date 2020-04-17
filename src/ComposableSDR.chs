@@ -709,7 +709,17 @@ firhilbInterp f a =
 complexToReal :: ArrayPipe IO SamplesIQCF32 Float
 complexToReal = Pipe firhilbCreate firhilbInterp firhilbDestroy
 
+foreign import ccall unsafe "liquid_iirdes" c_liquid_iirdes
+  :: CInt ->
+  CInt ->
+    CInt ->
+      CUInt ->
+        Float -> Float -> Float -> Float -> Ptr Float -> Ptr Float -> IO ()
+
 {#pointer iirfilt_crcf as IirFiltC#}
+
+foreign import ccall unsafe "iirfilt_crcf_create_sos" c_firfilt_crcf_create_sos
+  :: CUInt -> CUInt -> CFloat -> IO IirFiltC
 
 foreign import ccall unsafe "iirfilt_crcf_create_dc_blocker" c_iirfilt_crcf_create_dc_blocker
   :: CFloat -> IO IirFiltC
@@ -897,20 +907,58 @@ foreign import ccall unsafe "nco_crcf_print" c_nco_crcf_print
   :: Nco -> IO ()
 
 foreign import ccall unsafe "nco_crcf_set_frequency" c_nco_crcf_set_frequency
-  :: Nco -> CFloat -> IO ()
+  :: Nco -> Float -> IO ()
+
+foreign import ccall unsafe "nco_crcf_set_pll_bandwidth" c_nco_crcf_set_pll_bandwidth
+  :: Nco -> Float -> IO ()
+
+foreign import ccall unsafe "nco_crcf_set_bandwidth" c_nco_crcf_set_bandwidth
+  :: Nco -> Float -> IO ()
 
 foreign import ccall unsafe "nco_crcf_mix_block_down" c_nco_crcf_mix_block_down
   :: Nco -> Ptr SamplesIQCF32 -> Ptr SamplesIQCF32 -> CUInt -> IO ()
 
+foreign import ccall unsafe "nco_crcf_mix_block_up" c_nco_crcf_mix_block_up
+  :: Nco -> Ptr SamplesIQCF32 -> Ptr SamplesIQCF32 -> CUInt -> IO ()
+
 foreign import ccall unsafe "nco_crcf_destroy" c_nco_crcf_destroy
   :: Nco -> IO ()
+
+ncoCreate :: Float -> IO Nco
+ncoCreate f = do
+  nco <- c_nco_crcf_create 1 -- 1 == VCO
+  c_nco_crcf_set_frequency nco f
+  putStrLn "Using NCO (VCO):"
+  c_nco_crcf_print nco
+  return nco
+
+ncoDestroy :: Nco -> IO ()
+ncoDestroy = c_nco_crcf_destroy
+
+ncoMixDown ::
+     MonadIO m => Nco -> A.Array SamplesIQCF32 -> m (A.Array SamplesIQCF32)
+ncoMixDown nco a =
+  let n = (fromIntegral $ A.length a)
+   in wrap n (8 * n) (\x n y -> c_nco_crcf_mix_block_down nco x y n) a
+
+mixDown :: Float -> ArrayPipe IO SamplesIQCF32 SamplesIQCF32
+mixDown f = Pipe (ncoCreate f) ncoMixDown ncoDestroy
+
+ncoMixUp ::
+     MonadIO m => Nco -> A.Array SamplesIQCF32 -> m (A.Array SamplesIQCF32)
+ncoMixUp nco a =
+  let n = (fromIntegral $ A.length a)
+   in wrap n (8 * n) (\x n y -> c_nco_crcf_mix_block_up nco x y n) a
+
+mixUp :: Float -> ArrayPipe IO SamplesIQCF32 SamplesIQCF32
+mixUp f = Pipe (ncoCreate f) ncoMixUp ncoDestroy
 
 firpfbchCreate :: Int -> IO (FirPfbch, Nco, Int)
 firpfbchCreate n = do
   fb <- c_firpfbch_crcf_create_kaiser 0 (fromIntegral n) 7 80.0
   putStrLn "Using polyphase filterbank channelizer:"
   c_firpfbch_crcf_print fb
-  nco <- c_nco_crcf_create 1 -- 1 = VCO
+  nco <- c_nco_crcf_create 1
   let offset = -0.5 * (fromIntegral n - 1) / fromIntegral n * 2 * pi
   c_nco_crcf_set_frequency nco offset
   putStrLn $ "Offsetting frequency by " ++ show offset ++ " using VCO:"
@@ -984,4 +1032,47 @@ mux ps = Pipe start process done
     process = zipWithM (\(Pipe s p _) a -> s >>= \r -> p r a)
     done = mapM_ (\(Pipe s _ d) -> s >>= \r -> d r)
 
+{#pointer firfilt_crcf as FirFiltC#}
 
+foreign import ccall unsafe "firfilt_crcf_create_kaiser" c_firfilt_crcf_create_kaiser
+  :: CUInt -> Float -> Float -> Float -> IO FirFiltC
+
+foreign import ccall unsafe "firfilt_crcf_print" c_firfilt_crcf_print
+  :: FirFiltC -> IO ()
+
+foreign import ccall unsafe "firfilt_crcf_set_scale" c_firfilt_crcf_set_scale
+  :: FirFiltC -> Float -> IO ()
+
+foreign import ccall unsafe "firfilt_groupdelay" c_firfilt_crcf_groupdelay
+  :: FirFiltC -> Float -> IO Float
+
+foreign import ccall unsafe "firfilt_crcf_execute_block" c_firfilt_crcf_execute_block
+  :: FirFiltC ->
+  Ptr SamplesIQCF32 -> CUInt -> Ptr SamplesIQCF32 -> IO ()
+
+foreign import ccall unsafe "firfilt_crcf_destroy" c_firfilt_crcf_destroy
+  :: FirFiltC -> IO ()
+
+firfiltCreateCKaiser :: CUInt -> Float -> Float -> Float -> IO FirFiltC
+firfiltCreateCKaiser n fc as mu = do
+  f <- c_firfilt_crcf_create_kaiser n fc as mu
+  putStrLn "Using FIR filter:"
+  c_firfilt_crcf_print f
+  return f
+
+firfiltCDestroy :: FirFiltC -> IO ()
+firfiltCDestroy = c_firfilt_crcf_destroy
+
+firFiltC :: MonadIO m => FirFiltC -> A.Array SamplesIQCF32 -> m (A.Array SamplesIQCF32)
+firFiltC f a =
+  let n = (fromIntegral $ A.length a)
+   in wrap n (8 * n) (c_firfilt_crcf_execute_block f) a
+
+firFilterCKaiser ::
+     CUInt
+  -> Float
+  -> Float
+  -> Float
+  -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
+firFilterCKaiser n fc as mu =
+  Pipe (firfiltCreateCKaiser n fc as mu) firFiltC firfiltCDestroy
