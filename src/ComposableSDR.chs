@@ -17,6 +17,7 @@ module ComposableSDR
   , resamplerDestroy
   , fmDemodulator
   , wbFMDemodulator
+  , wbSFMDemodulator
   , amDemodulator
   , firDecimator
   , automaticGainControl
@@ -30,8 +31,10 @@ module ComposableSDR
   , distribute_
   , mix
   , mux
+  , tee
   , addPipe
   , compact
+  , delay
   , AudioFormat(..)
   , SamplesIQCF32
   ) where
@@ -43,10 +46,10 @@ module ComposableSDR
 import           Foreign.C.String
 import           Foreign.C.Types
 import           Foreign.Marshal.Alloc
-import           Foreign.Marshal.Array hiding (newArray)
+import           Foreign.Marshal.Array                      hiding (newArray)
 import           Foreign.Ptr
 import           Foreign.Storable
-import           Prelude               hiding ((.))
+import           Prelude                                    hiding ((.))
 
 import           Control.Category                           (Category (..))
 import           Control.Exception                          (Exception, throwIO)
@@ -62,6 +65,7 @@ import           Foreign.ForeignPtr                         (plusForeignPtr,
 import           GHC.ForeignPtr                             (mallocPlainForeignPtrBytes)
 
 import           Foreign.ForeignPtr.Unsafe                  (unsafeForeignPtrToPtr)
+import           Foreign.Storable.Tuple()
 
 import           System.IO                                  (stdout)
 
@@ -118,6 +122,9 @@ newtype Array a = Array
 
 toArray :: AT.Array a -> Array a
 toArray = Array
+
+mapA :: (Storable a, Storable b) => (a -> b) -> A.Array a -> A.Array b
+mapA f = A.fromList . fmap f . A.toList
 
 instance Storable a => SF.Buffer Array a where
     fromForeignPtr fp i n =
@@ -237,7 +244,7 @@ compact n (FL.Fold step1 start1 done1) = FL.Fold step start done
   where
     start = do
       s <- start1
-      a0 <- AT.newArray 0
+      let a0 = A.fromList []
       return (s, a0)
     done (s, b) = do
       s' <- step1 s b
@@ -250,7 +257,7 @@ compact n (FL.Fold step1 start1 done1) = FL.Fold step start done
               (a', b') <-
                 if m == n
                   then do
-                    a0 <- AT.newArray 0
+                    let a0 = A.fromList []
                     return (ba, a0)
                   else return $ AT.splitAt n ba
               s' <- step1 s a'
@@ -258,6 +265,26 @@ compact n (FL.Fold step1 start1 done1) = FL.Fold step start done
             else do
               ba <- AT.spliceTwo b a
               return (s, ba)
+
+delay ::
+     (Monoid a, Storable a)
+  => Int
+  -> FL.Fold IO (A.Array a) b
+  -> FL.Fold IO (A.Array a) b
+delay n (FL.Fold step1 start1 done1) = FL.Fold step start done
+  where
+    start = do
+      s <- start1
+      let a0 = A.fromList (replicate n mempty)
+      return (s, a0)
+    done (s, b) = do
+      s' <- step1 s b
+      done1 s'
+    step (s, b) a = do
+      ba <- AT.spliceTwo b a
+      let (a', b') = AT.splitAt (A.length a - n) ba
+      s' <- step1 s a'
+      return (s', b')
 
 {-# INLINABLE fileSink #-}
 fileSink :: (MonadIO m, MC.MonadCatch m, Storable a) => FilePath -> FL.Fold m (A.Array a) ()
@@ -718,9 +745,6 @@ foreign import ccall unsafe "liquid_iirdes" c_liquid_iirdes
 
 {#pointer iirfilt_crcf as IirFiltC#}
 
-foreign import ccall unsafe "iirfilt_crcf_create_sos" c_firfilt_crcf_create_sos
-  :: CUInt -> CUInt -> CFloat -> IO IirFiltC
-
 foreign import ccall unsafe "iirfilt_crcf_create_dc_blocker" c_iirfilt_crcf_create_dc_blocker
   :: CFloat -> IO IirFiltC
 
@@ -738,6 +762,9 @@ foreign import ccall unsafe "iirfilt_crcf_destroy" c_iirfilt_crcf_destroy
 foreign import ccall unsafe "iirfilt_rrrf_create" c_iirfilt_rrrf_create
   :: Ptr Float -> CUInt -> Ptr Float -> CUInt -> IO IirFilt
 
+foreign import ccall unsafe "iirfilt_rrrf_create_sos" c_iirfilt_rrrf_create_sos
+  :: Ptr Float -> Ptr Float -> CUInt -> IO IirFilt
+
 foreign import ccall unsafe "iirfilt_rrrf_print" c_iirfilt_rrrf_print
   :: IirFilt -> IO ()
 
@@ -746,6 +773,18 @@ foreign import ccall unsafe "iirfilt_rrrf_execute_block" c_iirfilt_rrrf_execute_
 
 foreign import ccall unsafe "iirfilt_rrrf_destroy" c_iirfilt_rrrf_destroy
   :: IirFilt -> IO ()
+
+iirDes :: Int -> Float -> Float -> Float -> Float -> IO IirFilt
+iirDes n fc f0 ap' as = do
+  let r = n `mod` 2 -- odd/even order
+      l = (n - r) `div` 2 -- filter semi-length
+      hLen = 3 * (l + r)
+  allocaArray hLen $ \b ->
+    allocaArray hLen $ \a
+            -- LIQUID_IIRDES_BUTTER LIQUID_IIRDES_LOWPASS LIQUID_IIRDES_SOS
+     -> do
+      c_liquid_iirdes 0 0 0 (fromIntegral n) fc f0 ap' as b a
+      c_iirfilt_rrrf_create_sos b a (fromIntegral $ l + r)
 
 iirfiltCreate :: [Float] -> [Float] -> IO IirFilt
 iirfiltCreate bt at =
@@ -774,6 +813,16 @@ iirFilt f a =
 
 iirFilter :: [Float] -> [Float] -> ArrayPipe IO Float Float
 iirFilter bt at = Pipe (iirfiltCreate bt at) iirFilt iirfiltDestroy
+
+iirDesFilter ::
+     Int
+  -> Float
+  -> Float
+  -> Float
+  -> Float
+  -> Pipe IO (A.Array Float) (A.Array Float)
+iirDesFilter n fc f0 ap' as =
+  Pipe (iirDes n fc f0 ap' as) iirFilt iirfiltDestroy
 
 dcBlockerCreate :: IO IirFiltC
 dcBlockerCreate = do
@@ -909,10 +958,22 @@ foreign import ccall unsafe "nco_crcf_print" c_nco_crcf_print
 foreign import ccall unsafe "nco_crcf_set_frequency" c_nco_crcf_set_frequency
   :: Nco -> Float -> IO ()
 
-foreign import ccall unsafe "nco_crcf_set_pll_bandwidth" c_nco_crcf_set_pll_bandwidth
+foreign import ccall unsafe "nco_crcf_pll_set_bandwidth" c_nco_crcf_pll_set_bandwidth
   :: Nco -> Float -> IO ()
 
-foreign import ccall unsafe "nco_crcf_set_bandwidth" c_nco_crcf_set_bandwidth
+foreign import ccall unsafe "nco_crcf_pll_step" c_nco_crcf_pll_step
+  :: Nco -> Float -> IO ()
+
+foreign import ccall unsafe "nco_crcf_step" c_nco_crcf_step
+  :: Nco -> IO ()
+
+foreign import ccall unsafe "nco_crcf_cexpf" c_nco_crcf_cexpf
+  :: Nco -> Ptr SamplesIQCF32 -> IO ()
+
+foreign import ccall unsafe "nco_crcf_get_phase" c_nco_crcf_get_phase
+  :: Nco -> IO Float
+
+foreign import ccall unsafe "nco_crcf_set_phase" c_nco_crcf_set_phase
   :: Nco -> Float -> IO ()
 
 foreign import ccall unsafe "nco_crcf_mix_block_down" c_nco_crcf_mix_block_down
@@ -939,7 +1000,7 @@ ncoMixDown ::
      MonadIO m => Nco -> A.Array SamplesIQCF32 -> m (A.Array SamplesIQCF32)
 ncoMixDown nco a =
   let n = (fromIntegral $ A.length a)
-   in wrap n (8 * n) (\x n y -> c_nco_crcf_mix_block_down nco x y n) a
+   in wrap n (8 * n) (\x m y -> c_nco_crcf_mix_block_down nco x y m) a
 
 mixDown :: Float -> ArrayPipe IO SamplesIQCF32 SamplesIQCF32
 mixDown f = Pipe (ncoCreate f) ncoMixDown ncoDestroy
@@ -948,7 +1009,7 @@ ncoMixUp ::
      MonadIO m => Nco -> A.Array SamplesIQCF32 -> m (A.Array SamplesIQCF32)
 ncoMixUp nco a =
   let n = (fromIntegral $ A.length a)
-   in wrap n (8 * n) (\x n y -> c_nco_crcf_mix_block_up nco x y n) a
+   in wrap n (8 * n) (\x m y -> c_nco_crcf_mix_block_up nco x y m) a
 
 mixUp :: Float -> ArrayPipe IO SamplesIQCF32 SamplesIQCF32
 mixUp f = Pipe (ncoCreate f) ncoMixUp ncoDestroy
@@ -1032,6 +1093,26 @@ mux ps = Pipe start process done
     process = zipWithM (\(Pipe s p _) a -> s >>= \r -> p r a)
     done = mapM_ (\(Pipe s _ d) -> s >>= \r -> d r)
 
+tee ::
+     (Monad m, Storable b, Storable c)
+  => ArrayPipe m a b
+  -> ArrayPipe m a c
+  -> ArrayPipe m a (b, c)
+tee (Pipe start1 process1 done1) (Pipe start2 process2 done2) =
+  Pipe start process done
+  where
+    start = (,) <$> start1 <*> start2
+    done (r1, r2) = done2 r2 >> done1 r1
+    process (r1, r2) a = do
+      b <- process1 r1 a
+      c <- process2 r2 a
+      return $ A.fromList $ zip (A.toList b) (A.toList c)
+
+lMapA :: (Storable a, Storable t) => (t -> a) -> ArrayPipe m a b -> ArrayPipe m t b
+lMapA f (Pipe start process done) = Pipe start proc done
+  where
+    proc r a = process r (mapA f a)
+
 {#pointer firfilt_crcf as FirFiltC#}
 
 foreign import ccall unsafe "firfilt_crcf_create_kaiser" c_firfilt_crcf_create_kaiser
@@ -1043,7 +1124,7 @@ foreign import ccall unsafe "firfilt_crcf_print" c_firfilt_crcf_print
 foreign import ccall unsafe "firfilt_crcf_set_scale" c_firfilt_crcf_set_scale
   :: FirFiltC -> Float -> IO ()
 
-foreign import ccall unsafe "firfilt_groupdelay" c_firfilt_crcf_groupdelay
+foreign import ccall unsafe "firfilt_crcf_groupdelay" c_firfilt_crcf_groupdelay
   :: FirFiltC -> Float -> IO Float
 
 foreign import ccall unsafe "firfilt_crcf_execute_block" c_firfilt_crcf_execute_block
@@ -1056,6 +1137,7 @@ foreign import ccall unsafe "firfilt_crcf_destroy" c_firfilt_crcf_destroy
 firfiltCreateCKaiser :: CUInt -> Float -> Float -> Float -> IO FirFiltC
 firfiltCreateCKaiser n fc as mu = do
   f <- c_firfilt_crcf_create_kaiser n fc as mu
+  c_firfilt_crcf_set_scale f (2.0 * fc)
   putStrLn "Using FIR filter:"
   c_firfilt_crcf_print f
   return f
@@ -1076,3 +1158,108 @@ firFilterCKaiser ::
   -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
 firFilterCKaiser n fc as mu =
   Pipe (firfiltCreateCKaiser n fc as mu) firFiltC firfiltCDestroy
+
+firFilterC ::
+     FirFiltC -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
+firFilterC f = Pipe (return f) firFiltC firfiltCDestroy
+
+pllCreate :: Float -> Float -> IO (Nco, Nco)
+pllCreate f bw = do
+  ncoPilotExact <- c_nco_crcf_create 1
+  c_nco_crcf_set_frequency ncoPilotExact f
+  c_nco_crcf_print ncoPilotExact
+  c_nco_crcf_pll_set_bandwidth ncoPilotExact bw
+  ncoStereoSubcarrier <- c_nco_crcf_create 1
+  c_nco_crcf_set_frequency ncoStereoSubcarrier (2 * f)
+  putStrLn "Using FMS PLL:"
+  c_nco_crcf_print ncoPilotExact
+  c_nco_crcf_print ncoStereoSubcarrier
+  return (ncoPilotExact, ncoStereoSubcarrier)
+
+pllDestroy :: (Nco, Nco) -> IO ()
+pllDestroy (ncoPE, ncoSS) = do
+  c_nco_crcf_destroy ncoSS
+  c_nco_crcf_destroy ncoPE
+
+pllStep :: (Nco, Nco) -> (SamplesIQCF32, SamplesIQCF32) -> IO SamplesIQCF32
+pllStep (ncoPE, ncoSS) (p, s) = do
+  phi <- c_nco_crcf_get_phase ncoPE
+  c_nco_crcf_set_phase ncoSS (2 * phi)
+  alloca $ \c -> do
+    c_nco_crcf_cexpf ncoPE c
+    c' <- peek c
+    let (CFloat perr) = phase $ p * conjugate c'
+    c_nco_crcf_pll_step ncoPE perr
+    c_nco_crcf_step ncoPE
+    alloca $ \a ->
+      alloca $ \b -> do
+        poke a s
+        c_nco_crcf_mix_block_down ncoSS a b 1
+        peek b
+
+pllEx ::
+     MonadIO m
+  => (Nco, Nco)
+  -> A.Array (SamplesIQCF32, SamplesIQCF32)
+  -> m (A.Array SamplesIQCF32)
+pllEx ns a = liftIO $ A.fromList <$> mapM (pllStep ns) (A.toList a)
+
+fmsPll ::
+     Float -> Float -> ArrayPipe IO (SamplesIQCF32, SamplesIQCF32) SamplesIQCF32
+fmsPll f bw = Pipe (pllCreate f bw) pllEx pllDestroy
+
+wbSFMDemodulator ::
+     Double
+  -> IO (Pipe IO (A.Array (CFloat, CFloat)) (A.Array (Float, Float)), Float)
+wbSFMDemodulator quadRate = do
+  let kPilotHz = 19000.0
+      kPLLBandwidthHz = 9.0
+      kPilotFIRHalfbandHz = 800.0
+      kAudioFIRCutoffHz = 15000.0
+      kDeEmphasisOrder = 2
+      kDeEmphasisCutoffHz = 5000.0
+      kStereoGain = 2.0
+      ncoF = realToFrac $ kPilotHz * 2 * pi / quadRate
+      firFilt n fc = firFilterCKaiser (round n) (realToFrac fc) 60.0 0.0
+      approxMixDown = mixDown ncoF
+      approxMixUp = mixUp ncoF
+      pll = fmsPll ncoF (realToFrac $ kPLLBandwidthHz / quadRate)
+      ex (CFloat a) = a
+      firLPlusR =
+        mapA (ex . realPart) <$>
+        firFilt (quadRate / 1350.0) (kAudioFIRCutoffHz / quadRate)
+      firLMinusR =
+        mapA ((* kStereoGain) . ex . realPart) <$>
+        firFilt (quadRate / 1350.0) (kAudioFIRCutoffHz / quadRate)
+      iirDeemphL =
+        iirDesFilter
+          kDeEmphasisOrder
+          (realToFrac $ kDeEmphasisCutoffHz / quadRate)
+          0.0
+          10.0
+          10.0
+      iirDeemphR =
+        iirDesFilter
+          kDeEmphasisOrder
+          (realToFrac $ kDeEmphasisCutoffHz / quadRate)
+          0.0
+          10.0
+          10.0
+  fp <-
+    firfiltCreateCKaiser
+      (round $ quadRate / 1350.0)
+      (realToFrac $ kPilotFIRHalfbandHz / quadRate)
+      60.0
+      0.0
+  gDelay <- c_firfilt_crcf_groupdelay fp (realToFrac $ 100 / quadRate)
+  let firPilot = firFilterC fp
+      wire = Control.Category.id
+      prep = approxMixUp . firPilot . approxMixDown
+      process =
+        tee (lMapA fst iirDeemphL) (lMapA snd iirDeemphR) .
+        (mapA (\(x, y) -> (y + x, y - x)) <$>
+         tee
+           (firLMinusR .
+            pll . tee (lMapA ((:+ 0) . fst) prep) (lMapA ((:+ 0) . snd) wire))
+           (lMapA ((:+ 0) . snd) firLPlusR))
+  return (process, gDelay)
