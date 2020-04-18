@@ -94,6 +94,12 @@ to get 48kHz output WAV file:
 cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeWBFM 4 WAV"
 ```
 
+There is also experimental stereo FM decoder:
+
+```sh
+cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeFMS 4 WAV"
+```
+
 #### Example 2
 
 To run as a [PMR446](https://en.wikipedia.org/wiki/PMR446) scanner:
