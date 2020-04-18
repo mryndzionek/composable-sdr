@@ -18,6 +18,8 @@ data Demod
            CS.AudioFormat
   | DeWBFM Int
            CS.AudioFormat
+  | DeFMS Int
+          CS.AudioFormat
   | DeAM CS.AudioFormat
   deriving (Show, Read)
 
@@ -149,14 +151,14 @@ sdrProcess opts = do
                                (CS.distribute_ sinks)
                  else CS.addPipe demod (sink name))
       nch = _channels opts
-      getAudioSink decim fmt =
+      getAudioSink decim fmt chn =
         let srOut =
               round
                 (if _bandwidth opts == 0
                    then _samplerate opts
                    else _bandwidth opts) `div`
               decim
-         in CS.audioFileSink fmt (srOut `div` nch) (_numsamples opts)
+         in CS.audioFileSink fmt (srOut `div` nch) (_numsamples opts) chn
       runFold fdl = S.fold fdl (prep src)
   case _demod opts of
     DeNo ->
@@ -165,21 +167,25 @@ sdrProcess opts = do
     DeNBFM kf fmt ->
       runFold
         (assembleFold
-           (getAudioSink 1 fmt)
+           (getAudioSink 1 fmt 1)
            (CS.fmDemodulator kf . agc)
            (_outname opts)
            nch)
     DeWBFM decim fmt ->
       runFold
         (assembleFold
-           (getAudioSink decim fmt)
+           (getAudioSink decim fmt 1)
            (CS.wbFMDemodulator (_bandwidth opts) decim . agc)
            (_outname opts)
            nch)
+    DeFMS decim fmt -> do
+      let sink = getAudioSink decim fmt 2 (_outname opts)
+      dec <- CS.stereoFMDecoder (_bandwidth opts) decim sink
+      runFold $ CS.addPipe (CS.fmDemodulator 0.8 . agc) dec
     DeAM fmt ->
       runFold
         (assembleFold
-           (getAudioSink 1 fmt)
+           (getAudioSink 1 fmt 1)
            (CS.amDemodulator . agc)
            (_outname opts)
            nch)

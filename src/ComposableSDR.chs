@@ -17,7 +17,7 @@ module ComposableSDR
   , resamplerDestroy
   , fmDemodulator
   , wbFMDemodulator
-  , wbSFMDemodulator
+  , stereoFMDecoder
   , amDemodulator
   , firDecimator
   , automaticGainControl
@@ -267,23 +267,23 @@ compact n (FL.Fold step1 start1 done1) = FL.Fold step start done
               return (s, ba)
 
 delay ::
-     (Monoid a, Storable a)
+     (MonadIO m, Storable a, Num a)
   => Int
-  -> FL.Fold IO (A.Array a) b
-  -> FL.Fold IO (A.Array a) b
+  -> FL.Fold m (A.Array (a, a)) b
+  -> FL.Fold m (A.Array a) b
 delay n (FL.Fold step1 start1 done1) = FL.Fold step start done
   where
     start = do
       s <- start1
-      let a0 = A.fromList (replicate n mempty)
+      let a0 = A.fromList (replicate n 0)
       return (s, a0)
     done (s, b) = do
-      s' <- step1 s b
+      s' <- step1 s (A.fromList $ zip (A.toList b) (repeat 0))
       done1 s'
     step (s, b) a = do
       ba <- AT.spliceTwo b a
       let (a', b') = AT.splitAt (A.length a - n) ba
-      s' <- step1 s a'
+      s' <- step1 s (A.fromList $ zip (A.toList a) (A.toList a'))
       return (s', b')
 
 {-# INLINABLE fileSink #-}
@@ -609,14 +609,14 @@ amdemodDestroy = c_ampmodem_destroy
 amDemodulator :: Demodulator
 amDemodulator = Pipe amdemodCreate amDemod amdemodDestroy
 
-openAudioFile :: AudioFormat -> FilePath -> Int -> Int -> IO SF.Handle
-openAudioFile fmt fp sr sn = SF.openFile (fp ++ ext) SF.WriteMode info
+openAudioFile :: AudioFormat -> FilePath -> Int -> Int -> Int -> IO SF.Handle
+openAudioFile fmt fp sr sn nch = SF.openFile (fp ++ ext) SF.WriteMode info
   where
     sfFmt AU  = (SF.HeaderFormatAu, ".au")
     sfFmt WAV = (SF.HeaderFormatWav, ".wav")
     (sff, ext) = sfFmt fmt
     info =
-      SF.Info sn sr 1 (SF.Format sff SF.SampleFormatFloat SF.EndianBig) 1 False
+      SF.Info sn sr nch (SF.Format sff SF.SampleFormatFloat SF.EndianBig) 1 False
 
 writeToAudioFile :: (MonadIO m, SF.Sample a) => SF.Handle -> A.Array a -> m ()
 writeToAudioFile h a = do
@@ -631,10 +631,11 @@ audioFileSink ::
   => AudioFormat
   -> Int
   -> Int
+  -> Int
   -> String
   -> FL.Fold m (A.Array a) ()
-audioFileSink fmt sr sn fp =
-  let wav = openAudioFile fmt fp sr sn
+audioFileSink fmt sr sn nch fp =
+  let wav = openAudioFile fmt fp sr sn nch
    in bracketIO wav closeAudioFile (F.drainBy . writeToAudioFile)
 
 foldArray :: Storable a => (A.Array a -> IO b) -> FL.Fold IO (A.Array a) b
@@ -675,7 +676,7 @@ foreign import ccall unsafe "firdecim_rrrf_destroy" c_firdecim_rrrf_destroy
 
 firdecimCreate :: Int -> IO FirDecim
 firdecimCreate m = do
-  f <- c_firdecim_rrrf_create_kaiser (fromIntegral m) 5 60.0
+  f <- c_firdecim_rrrf_create_kaiser (fromIntegral m) 10 60.0
   putStrLn "Using output decimator:"
   c_firdecim_rrrf_print f
   return f
@@ -1208,10 +1209,12 @@ fmsPll ::
      Float -> Float -> ArrayPipe IO (SamplesIQCF32, SamplesIQCF32) SamplesIQCF32
 fmsPll f bw = Pipe (pllCreate f bw) pllEx pllDestroy
 
-wbSFMDemodulator ::
+-- loosely based on https://github.com/windytan/wfm-tools
+stereoFMDecoder' ::
      Double
-  -> IO (Pipe IO (A.Array (CFloat, CFloat)) (A.Array (Float, Float)), Float)
-wbSFMDemodulator quadRate = do
+  -> Int
+  -> IO (Pipe IO (A.Array (Float, Float)) (A.Array (Float, Float)), Int)
+stereoFMDecoder' quadRate decim = do
   let kPilotHz = 19000.0
       kPLLBandwidthHz = 9.0
       kPilotFIRHalfbandHz = 800.0
@@ -1256,10 +1259,28 @@ wbSFMDemodulator quadRate = do
       wire = Control.Category.id
       prep = approxMixUp . firPilot . approxMixDown
       process =
-        tee (lMapA fst iirDeemphL) (lMapA snd iirDeemphR) .
+        tee
+          (lMapA fst (firDecimator decim . iirDeemphL))
+          (lMapA snd (firDecimator decim . iirDeemphR)) .
         (mapA (\(x, y) -> (y + x, y - x)) <$>
          tee
            (firLMinusR .
-            pll . tee (lMapA ((:+ 0) . fst) prep) (lMapA ((:+ 0) . snd) wire))
-           (lMapA ((:+ 0) . snd) firLPlusR))
-  return (process, gDelay)
+            pll .
+            tee
+              (lMapA ((:+ 0) . CFloat . fst) prep)
+              (lMapA ((:+ 0) . CFloat . snd) wire))
+           (lMapA ((:+ 0) . CFloat . snd) firLPlusR))
+  return (process, round gDelay)
+
+stereoFMDecoder ::
+     Double
+  -> Int
+  -> FL.Fold IO (A.Array Float) b
+  -> IO (FL.Fold IO (A.Array Float) b)
+stereoFMDecoder quadRate decim sink = do
+  (dem, d) <- stereoFMDecoder' quadRate decim
+  let snk =
+        FL.lmapM
+          (return . A.fromList . concatMap (\(x, y) -> [x, y]) . A.toList)
+          sink
+  return $ delay d (addPipe dem snk)
