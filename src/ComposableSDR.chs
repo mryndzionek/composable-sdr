@@ -815,14 +815,14 @@ iirFilt f a =
 iirFilter :: [Float] -> [Float] -> ArrayPipe IO Float Float
 iirFilter bt at = Pipe (iirfiltCreate bt at) iirFilt iirfiltDestroy
 
-iirDesFilter ::
+iirDeemphFilter ::
      Int
   -> Float
   -> Float
   -> Float
   -> Float
   -> Pipe IO (A.Array Float) (A.Array Float)
-iirDesFilter n fc f0 ap' as =
+iirDeemphFilter n fc f0 ap' as =
   Pipe (iirDes n fc f0 ap' as) iirFilt iirfiltDestroy
 
 dcBlockerCreate :: IO IirFiltC
@@ -844,24 +844,10 @@ dcBlocker = Pipe dcBlockerCreate iirCFilt iirfiltCDestroy
 iirfiltCDestroy :: IirFiltC -> IO ()
 iirfiltCDestroy = c_iirfilt_crcf_destroy
 
--- This is mostly taken from GNU Radio
-fmDeemphTaps :: Double -> ([Float], [Float])
-fmDeemphTaps fs =
-  let tau = 75e-6
-      wc = 1 / tau
-      wca = 2.0 * fs * tan (wc / (2.0 * fs))
-      k = -wca / (2.0 * fs)
-      z1 = -1.0
-      p1 = (1.0 + k) / (1.0 - k)
-      b0 = -k / (1.0 - k)
-      btaps = realToFrac <$> [b0 * 1.0, b0 * (-z1)]
-      ataps = realToFrac <$> [1.0, -p1]
-   in (btaps, ataps)
-
 wbFMDemodulator :: Double -> Int -> Demodulator
 wbFMDemodulator quadRate decim =
-  let (dbt, dat) = fmDeemphTaps (quadRate / fromIntegral decim)
-   in firDecimator decim . iirFilter dbt dat . fmDemodulator 0.6
+  let iirDeemph = iirDeemphFilter 2 (realToFrac $ 5000 / quadRate) 0.0 10.0 10.0
+   in firDecimator decim . iirDeemph . fmDemodulator 0.6
 
 {#pointer agc_crcf as Agc#}
 
@@ -1235,14 +1221,14 @@ stereoFMDecoder' quadRate decim = do
         mapA ((* kStereoGain) . ex . realPart) <$>
         firFilt (quadRate / 1350.0) (kAudioFIRCutoffHz / quadRate)
       iirDeemphL =
-        iirDesFilter
+        iirDeemphFilter
           kDeEmphasisOrder
           (realToFrac $ kDeEmphasisCutoffHz / quadRate)
           0.0
           10.0
           10.0
       iirDeemphR =
-        iirDesFilter
+        iirDeemphFilter
           kDeEmphasisOrder
           (realToFrac $ kDeEmphasisCutoffHz / quadRate)
           0.0
