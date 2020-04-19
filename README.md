@@ -15,7 +15,13 @@ code quality even for complex signal processing flows.
 
 This repo will stay fairly low-level. The applications built using provided processing blocks
 should be lean and mean, so that it's possible to deploy them on even not-so-powerful, embedded,
-headless systems. All the UI interaction stuff can be done via sockets.
+headless systems. All the UI interaction stuff can be always done via sockets and this
+is probably one of the best designs for such things.
+
+As of today there is only one fairly minimalistic application implemented, but I
+think the approach already shows its benefits. Writing an application with just one set of
+functionalities offered by `soapy_sdr`, in an imperative language, would be an accomplishment in itself.
+More details below.
 
 ## Dependencies
 
@@ -24,7 +30,8 @@ headless systems. All the UI interaction stuff can be done via sockets.
  - [liquid-dsp](https://github.com/jgaeddert/liquid-dsp)
 
 Cabal v2 project requires ghc-8.6.5, so before first `cabal v2-build` something like `cabal v2-configure -w /opt/ghc/8.6.5/bin/ghc-8.6.5`
-is needed.
+is needed. There is also a `stack.yaml` file available, but might not always be up-to-date, as I'm mostly using
+the Cabal v2 setup.
 
 ## Libraries and modules
 
@@ -100,6 +107,13 @@ There is also experimental stereo FM decoder:
 cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeFMS 4 WAV"
 ```
 
+It's possible to 'play live' running below commands in a separate terminal:
+
+```sh
+rm output*; mkfifo output.au && play output.au
+```
+and then starting `soapy_sdr`, but with AU audio format set.
+
 #### Example 2
 
 To run as a [PMR446](https://en.wikipedia.org/wiki/PMR446) scanner:
@@ -131,6 +145,6 @@ Then processing it and saving around 122MB in 10 seconds.
   - [ ] add live playback via PulseAudio
   - [ ] add RF protocol decoders
   - [ ] profile flows and introduce concurrency modifiers (`aheadly`, etc.)
-  - [ ] do some tests regarding DAB+
-  - [ ] use [static-haskell-nix](https://github.com/nh2/static-haskell-nix) to build standalone executables
+  - [ ] use [static-haskell-nix](https://github.com/nh2/static-haskell-nix) to build standalone executables (might not be possible, as musl doesn't support `dlopen`)
   - [ ] Template Haskell boilerplate code generator for Liquid-DSP blocks
+  - [ ] general cleanup - some structure is already emerging, so moving things to separate modules would be in order
