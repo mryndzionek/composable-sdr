@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Prepare
+      run: |
+        sudo apt-get update
+        sudo apt-get install libsndfile1-dev libsoapysdr-dev
+        wget https://github.com/jgaeddert/liquid-dsp/archive/v1.3.2.tar.gz
+        tar -zxvf v1.3.2.tar.gz
+        cd liquid-dsp-1.3.2
+        ./bootstrap.sh
+        ./configure
+        make -j4
+        sudo make install
+        sudo ldconfig
+
+    - name: Setup Stack
+      uses: mstksg/setup-stack@v1
+    
+    - name: Checkout
+      uses: actions/checkout@v2-beta
+      
+    - name: Build
+      run: |
+        stack build && time stack exec soapy_sdr -- --help
+

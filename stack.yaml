@@ -42,6 +42,7 @@ packages:
 extra-deps:
 - streamly-0.7.1
 - fusion-plugin-types-0.1.0@sha256:0f11bbc445ab8ae3dbbb3d5d2ea198bdb1ac020518b7f4f7579035dc89182438,1506
+- fusion-plugin-0.2.0@sha256:cd641cdd6b799a35b4f49cfeeaabe6d867155d176ab064883f7cb5eb5d9d0314,2038
 - hsndfile-0.8.0@sha256:3e77b6a4997e2c92b99864b1d63ec8fa42c9e4e26988f74bdf9930eb6793a323,1757
 
 # Override default flag values for local packages and extra-deps
