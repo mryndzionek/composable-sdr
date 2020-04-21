@@ -2,6 +2,8 @@
 
 DSP processing blocks aimed at SDR, embedded in Haskell.
 
+![build](https://github.com/mryndzionek/composable-sdr/workflows/build/badge.svg)
+
 ## Introduction
 
 This repo is aimed at exploring the usefulness of data flow programming for
