@@ -139,7 +139,7 @@ sdrProcess opts = do
          in CS.addPipe
               CS.dcBlocker
               (if nc > 1
-                 then CS.compact (nch * 8 * 1024) $
+                 then CS.compact (nch * 4 * 1024) $
                       if _mix opts
                         then CS.addPipe
                                (CS.mix .

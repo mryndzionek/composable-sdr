@@ -121,7 +121,7 @@ and then starting `soapy_sdr`, but with AU audio format set.
 To run as a [PMR446](https://en.wikipedia.org/wiki/PMR446) scanner:
 
 ```sh
-cabal v2-run -- soapy_sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40
+cabal v2-run -- soapy_sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40 -s -16
 ```
 
 This will output 16 WAV files, each for one PMR channel. To merge all the files into one `-m` flag can be used:

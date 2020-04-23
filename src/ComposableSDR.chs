@@ -894,17 +894,18 @@ agcExecuteBlock agc px n py = do
         c_agc_crcf_execute_block agc x 1 y
         s <- c_agc_squelch_crcf_get_status agc
         _ <- c_agc_crcf_get_rssi agc
-        when (s == 1) (poke y (0 :+ 0)) -- squelch enabled
+        -- /= LIQUID_AGC_SQUELCH_SIGNALHI
+        when (s /= 3) (poke y (0 :+ 0)) -- squelch enabled
   zipWithM_ go xsp ysp
 
 agcCreate :: Float -> IO Agc
 agcCreate tres = do
   a <- c_agc_crcf_create
-  c_agc_crcf_set_bandwidth a 0.25
+  c_agc_crcf_set_bandwidth a 0.1
   c_agc_crcf_set_signal_level a 1e-3
   c_agc_crcf_squelch_enable a
   c_agc_crcf_squelch_set_threshold a tres
-  c_agc_crcf_squelch_set_timeout a 100
+  c_agc_crcf_squelch_set_timeout a 1000
   putStrLn "Using AGC:"
   c_agc_crcf_print a
   return a
