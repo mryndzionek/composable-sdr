@@ -6,30 +6,78 @@ on:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    env:
+      APP_NAME: soapy_sdr
+      GHC_VER: 8.6.5
+      CABAL_VER: 3.2
+      APPIMGTOOL_VER: 12
+      LIQUIDDSP_VER: 1.3.2
+      SOAPYSDR_VER: 0.7.2
+      LIBRTLSDR_VER: 0.6.0
+      SOAPYRTLSDR_VER: 0.3.0
+
+    runs-on: ubuntu-16.04
 
     steps:
 
     - name: Prepare
       run: |
         sudo apt-get update
-        sudo apt-get install libsndfile1-dev libsoapysdr-dev
-        wget https://github.com/jgaeddert/liquid-dsp/archive/v1.3.2.tar.gz
-        tar -zxvf v1.3.2.tar.gz
-        cd liquid-dsp-1.3.2
+        sudo apt-get install libsndfile1-dev libusb-1.0-0-dev cabal-install-$CABAL_VER ghc-$GHC_VER
+        wget -P ~/bin https://github.com/AppImage/AppImageKit/releases/download/$APPIMGTOOL_VER/appimagetool-x86_64.AppImage
+        chmod +x ~/bin/appimagetool-x86_64.AppImage
+        wget https://github.com/pothosware/SoapySDR/archive/soapy-sdr-$SOAPYSDR_VER.tar.gz
+        tar -zxvf soapy-sdr-$SOAPYSDR_VER.tar.gz
+        cd SoapySDR-soapy-sdr-$SOAPYSDR_VER
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release ..
+        make -j
+        sudo make install
+        cd ../..
+        wget https://github.com/steve-m/librtlsdr/archive/$LIBRTLSDR_VER.tar.gz
+        tar -zxvf $LIBRTLSDR_VER.tar.gz
+        cd librtlsdr-$LIBRTLSDR_VER
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release ..
+        make -j
+        sudo make install
+        cd ../..
+        wget https://github.com/pothosware/SoapyRTLSDR/archive/soapy-rtlsdr-$SOAPYRTLSDR_VER.tar.gz
+        tar -zxvf  soapy-rtlsdr-$SOAPYRTLSDR_VER.tar.gz
+        cd SoapyRTLSDR-soapy-rtlsdr-$SOAPYRTLSDR_VER
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release ..
+        make -j
+        sudo make install
+        cd ../..
+        wget https://github.com/jgaeddert/liquid-dsp/archive/v$LIQUIDDSP_VER.tar.gz
+        tar -zxvf v$LIQUIDDSP_VER.tar.gz
+        cd liquid-dsp-$LIQUIDDSP_VER
         ./bootstrap.sh
         ./configure
         make -j4
         sudo make install
         sudo ldconfig
-
-    - name: Setup Stack
-      uses: mstksg/setup-stack@v1
     
     - name: Checkout
       uses: actions/checkout@v2-beta
       
     - name: Build
       run: |
-        stack build && time stack exec soapy_sdr -- --help
+        export PATH=$PATH:/opt/cabal/bin
+        export PATH=$PATH:~/bin
+        cabal update
+        cabal v2-configure -w /opt/ghc/$GHC_VER/bin/ghc-$GHC_VER
+        cabal user-config update
+        cabal v2-build
+        cabal v2-install --enable-relocatable
+        ldd ~/.cabal/bin/soapy_sdr
+        locate librtlsdr.so
+        locate librtlsdrSupport.so
+        appimagetool-x86_64.AppImage --version
+        mkdir -p ./$APP_NAME.AppDir/bin
+        mkdir -p ./$APP_NAME.AppDir/lib
 
