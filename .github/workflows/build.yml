@@ -7,7 +7,7 @@ jobs:
   build:
 
     env:
-      APP_NAME: soapy_sdr
+      APP_NAME: soapy-sdr
       GHC_VER: 8.6.5
       CABAL_VER: 3.2
       APPIMGTOOL_VER: 12
@@ -74,7 +74,7 @@ jobs:
         cabal user-config update
         cabal v2-build
         cabal v2-install --enable-relocatable
-        ldd ~/.cabal/bin/soapy_sdr
+        ldd ~/.cabal/bin/$APP_NAME
         locate librtlsdr.so
         locate librtlsdrSupport.so
         appimagetool-x86_64.AppImage --version

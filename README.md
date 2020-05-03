@@ -22,7 +22,7 @@ is probably one of the best designs for such things.
 
 As of today there is only one fairly minimalistic application implemented, but I
 think the approach already shows its benefits. Writing an application with just one set of
-functionalities offered by `soapy_sdr`, in an imperative language, would be an accomplishment in itself.
+functionalities offered by `soapy-sdr`, in an imperative language, would be an accomplishment in itself.
 More details below.
 
 ## Dependencies
@@ -43,7 +43,7 @@ All the C-interop and Streamly streams and folds - one file for now.
 
 ## Tools and applications
 
-### soapy_sdr
+### soapy-sdr
 
 I/Q recorder using SoapySDR as backend. The output file format is CF32.
 Files can be opened in [inspectrum](https://github.com/miek/inspectrum).
@@ -73,7 +73,7 @@ We see a station on 92MHz. Bandwidth of the signal seems to be around 200kHz. Le
 (2 million sample = 10s of recording, DeNo means no demodulation - output will be CF32 IQ sample file):
 
 ```sh
-cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 200000 --demod "DeNo"
+cabal v2-run -- soapy-sdr -n 2000000 -f 92.0e6 -b 200000 --demod "DeNo"
 ```
 
 Lets now inspect the output file (output.cf32) in [inspectrum](https://github.com/miek/inspectrum).
@@ -83,7 +83,7 @@ Lets now inspect the output file (output.cf32) in [inspectrum](https://github.co
 Now let's record a wideband WAV file with FM demodulated signal:
 
 ```sh
-cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 200000 --demod "DeNBFM 0.6 WAV"
+cabal v2-run -- soapy-sdr -n 2000000 -f 92.0e6 -b 200000 --demod "DeNBFM 0.6 WAV"
 ```
 
 Sample rate of this file is 200kHz. Didn't know libsndfile can pull this off :smiley:. On a spectrogram in
@@ -100,13 +100,13 @@ Alright, let's now do proper wide band FM (mono) demodulation with de-emphasis, 
 to get 48kHz output WAV file:
 
 ```sh
-cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeWBFM 4 WAV"
+cabal v2-run -- soapy-sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeWBFM 4 WAV"
 ```
 
 There is also experimental stereo FM decoder:
 
 ```sh
-cabal v2-run -- soapy_sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeFMS 4 WAV"
+cabal v2-run -- soapy-sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeFMS 4 WAV"
 ```
 
 It's possible to 'play live' running below commands in a separate terminal:
@@ -114,14 +114,14 @@ It's possible to 'play live' running below commands in a separate terminal:
 ```sh
 rm output*; mkfifo output.au && play output.au
 ```
-and then starting `soapy_sdr`, but with AU audio format set.
+and then starting `soapy-sdr`, but with AU audio format set.
 
 #### Example 2
 
 To run as a [PMR446](https://en.wikipedia.org/wiki/PMR446) scanner:
 
 ```sh
-cabal v2-run -- soapy_sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40 -s -16
+cabal v2-run -- soapy-sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40 -s -16
 ```
 
 This will output 16 WAV files, each for one PMR channel. To merge all the files into one `-m` flag can be used:
@@ -134,7 +134,7 @@ Then resample the signal to 1.6MSPS and channelize to 20 channels, writing to 20
 We request 16M sample (after resampling), so around 10s of recording:
 
 ```sh
-time cabal v2-run -- soapy_sdr -n 16000000 -f 433.9e6 -s 3.2e6 -b 1.6e6 --demod "DeNo" -g 35 -a -50 -c 20
+time cabal v2-run -- soapy-sdr -n 16000000 -f 433.9e6 -s 3.2e6 -b 1.6e6 --demod "DeNo" -g 35 -a -50 -c 20
 ```
 
 Below is a GIF showing how the files are written and CPU utilization. No samples are lost and each file

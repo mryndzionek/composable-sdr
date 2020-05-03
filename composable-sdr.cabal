@@ -32,8 +32,8 @@ library
   extra-libraries:     SoapySDR, liquid
   default-extensions:  OverloadedStrings, ScopedTypeVariables, FlexibleContexts
 
-executable soapy_sdr
-  main-is:             SoapySDRRec.hs
+executable soapy-sdr
+  main-is:             SoapySDR.hs
   build-depends:       base ^>=4.12, binary, directory,
                        containers, optparse-applicative,
                        streamly, fusion-plugin,
