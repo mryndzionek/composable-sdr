@@ -149,6 +149,5 @@ Then processing it and saving around 122MB in 10 seconds.
   - [ ] add live playback via PulseAudio
   - [ ] add RF protocol decoders
   - [ ] profile flows and introduce concurrency modifiers (`aheadly`, etc.)
-  - [ ] use [static-haskell-nix](https://github.com/nh2/static-haskell-nix) to build standalone executables (might not be possible, as musl doesn't support `dlopen`)
   - [ ] Template Haskell boilerplate code generator for Liquid-DSP blocks
   - [ ] general cleanup - some structure is already emerging, so moving things to separate modules would be in order
