@@ -47,10 +47,44 @@ All the C-interop and Streamly streams and folds - one file for now.
 
 ### soapy-sdr
 
-I/Q recorder using SoapySDR as backend. The output file format is CF32.
+I/Q recorder and processor using SoapySDR as backend.
+
+![soapy-sdr](images/soapy-sdr.png)
+
+```
+Usage: soapy-sdr [-f|--frequency DOUBLE] [-s|--samplerate DOUBLE] 
+                 [-g|--gain DOUBLE] [-b|--bandwidth DOUBLE] 
+                 [-n|--numsamples INT] [-o|--output FILENAME] 
+                 [-d|--devname NAME] [--demod ARG] [-a|--agc DOUBLE] 
+                 [-c|--channels INT] [-m|--mix]
+  Process samples from an SDR retrieved via SoapySDR
+
+Available options:
+  -f,--frequency DOUBLE    Rx frequency in Hz (default: 1.0e8)
+  -s,--samplerate DOUBLE   Sample rate in Hz (default: 2560000.0)
+  -g,--gain DOUBLE         SDR gain level (0 = auto) (default: 0.0)
+  -b,--bandwidth DOUBLE    Desired output bandwidth in [Hz] (0 = samplerate = no
+                           resampling/decimation) (default: 0.0)
+  -n,--numsamples INT      Number of samples to capture (default: 1024)
+  -o,--output FILENAME     Output file(s) name (without
+                           extension) (default: "output")
+  -d,--devname NAME        Soapy device/driver name (default: "rtlsdr")
+  --demod ARG              Demodulation type (default: DeNo)
+  -a,--agc DOUBLE          Enable AGC with squelch threshold in [dB] (0 = no
+                           AGC) (default: 0.0)
+  -c,--channels INT        Number of channels to split the signal
+                           into (default: 1)
+  -m,--mix                 Instead of outputting separate file for each channel,
+                           mix them into one
+  -h,--help                Show this help text
+
+```
+
+Blue arrows a choices in signal flow. First choice is usage channelizer.
+If it's enabled, then the output signals can be written
+to separate files, or mixed together and written into one file.
+The raw/modulated signal output file format is CF32.
 Files can be opened in [inspectrum](https://github.com/miek/inspectrum).
-Stream can be resampled/decimated specifying `bandwidth` parameter.
-Additionally demodulated signal (AM and FM so far) can be exported to a WAV file.
 
 Some captures from ISM 433MHz
 
@@ -123,7 +157,7 @@ and then starting `soapy-sdr`, but with AU audio format set.
 To run as a [PMR446](https://en.wikipedia.org/wiki/PMR446) scanner:
 
 ```sh
-cabal v2-run -- soapy-sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40 -s -16
+cabal v2-run -- soapy-sdr -n 2000000 -f 446.1e6 -b 200000 -c 16 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 40 -a -16
 ```
 
 This will output 16 WAV files, each for one PMR channel. To merge all the files into one `-m` flag can be used:

@@ -93,6 +93,7 @@ desktopFile = do
       [ "[Desktop Entry]"
       , "Type=Application"
       , "Name=Soapy SDR"
+      , "Comment=I/Q recorder and processor using SoapySDR as backend" 
       , "Exec=" ++ appName
       , "Icon=" ++ appName
       , "Categories=Utility;"
