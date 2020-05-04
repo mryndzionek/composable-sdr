@@ -23,6 +23,7 @@ cabal.project.local~
 .ghc.environment.*
 ghcid.txt
 *.wav
+*.au
 *.cf32
 soapy-sdr.AppDir/
 Soapy_SDR-x86_64.AppImage
