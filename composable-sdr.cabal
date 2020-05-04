@@ -46,3 +46,13 @@ executable soapy-sdr
                        -fplugin=Fusion.Plugin
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings, ScopedTypeVariables, FlexibleContexts
+
+executable cabal2appimage
+  main-is:             Cabal2AppImage.hs
+  build-depends:       base ^>=4.12, directory, process, monad-extras,
+                       containers, optparse-applicative, text, listsafe,
+                       filepath
+  hs-source-dirs:      src
+  ghc-options:         -Wall -g -O0
+  default-language:    Haskell2010
+  default-extensions:  OverloadedStrings, ScopedTypeVariables, FlexibleContexts

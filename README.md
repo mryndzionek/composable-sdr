@@ -2,6 +2,8 @@
 
 DSP processing blocks aimed at SDR, embedded in Haskell.
 
+![logo](soapy-sdr.png)
+
 ![build](https://github.com/mryndzionek/composable-sdr/workflows/build/badge.svg)
 
 ## Introduction

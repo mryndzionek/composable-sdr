@@ -1,0 +1,8 @@
+#!/bin/sh
+SELF=$(readlink -f "$0")
+HERE=${SELF%/*}
+export PATH="${HERE}/usr/bin/:${HERE}/usr/sbin/:${HERE}/usr/games/:${HERE}/bin/:${HERE}/sbin/${PATH:+:$PATH}"
+export LD_LIBRARY_PATH="%libs%:${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export SOAPY_SDR_PLUGIN_PATH="%modules%"
+EXEC=$(grep -e '^Exec=.*' "${HERE}"/*.desktop | head -n 1 | cut -d "=" -f 2 | cut -d " " -f 1)
+exec "${EXEC}" "$@"

@@ -107,8 +107,8 @@ main = run =<< execParser opts
       info
         (parser <**> helper)
         (fullDesc <>
-         progDesc "Dump samples from an SDR via SoapySDR into IQ file" <>
-         header "dumpcf32")
+         progDesc "Process samples from an SDR retrieved via SoapySDR" <>
+         header "soapy-sdr")
 
 sdrProcess :: Opts -> IO ()
 sdrProcess opts = do
