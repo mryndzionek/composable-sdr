@@ -2,7 +2,8 @@ name: build
 
 on:
   push:
-
+    branches:    
+      - build
 jobs:
   build:
 
@@ -63,7 +64,7 @@ jobs:
         sudo ldconfig
     
     - name: Checkout
-      uses: actions/checkout@v2-beta
+      uses: actions/checkout@01aecccf739ca6ff86c0539fbc67a7a5007bbc81
       
     - name: Build
       run: |
@@ -79,7 +80,7 @@ jobs:
         appimagetool-x86_64.AppImage -vn soapy-sdr.AppDir
         ./Soapy_SDR-x86_64.AppImage -h
 
-    - uses: actions/upload-artifact@v1.0.0
+    - uses: actions/upload-artifact@e7eefc491732c06d0ebbf4d4f49dcc25b4d2f3a8
       with:
         name: Soapy_SDR-x86_64.AppImage
         path: Soapy_SDR-x86_64.AppImage
