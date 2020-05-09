@@ -52,23 +52,25 @@ I/Q recorder and processor using SoapySDR as backend.
 ![soapy-sdr](images/soapy-sdr.png)
 
 ```
-Usage: soapy-sdr [-f|--frequency DOUBLE] [-s|--samplerate DOUBLE] 
-                 [-g|--gain DOUBLE] [-b|--bandwidth DOUBLE] 
-                 [-n|--numsamples INT] [-o|--output FILENAME] 
-                 [-d|--devname NAME] [--demod ARG] [-a|--agc DOUBLE] 
-                 [-c|--channels INT] [-m|--mix]
+Usage: soapy-sdr [--filename NAME [--chunksize INT] | [--devname NAME] 
+                   [-f|--frequency DOUBLE] [-g|--gain DOUBLE]] 
+                 [-s|--samplerate DOUBLE] [-b|--bandwidth DOUBLE] 
+                 [-n|--numsamples INT] [-o|--output FILENAME] [--demod ARG] 
+                 [-a|--agc DOUBLE] [-c|--channels INT] [-m|--mix]
   Process samples from an SDR retrieved via SoapySDR
 
 Available options:
+  --filename NAME          Input (CF32) file name
+  --chunksize INT          Chunk size ins CF32 sample (default: 1024)
+  --devname NAME           Soapy device/driver name (default: "rtlsdr")
   -f,--frequency DOUBLE    Rx frequency in Hz (default: 1.0e8)
-  -s,--samplerate DOUBLE   Sample rate in Hz (default: 2560000.0)
   -g,--gain DOUBLE         SDR gain level (0 = auto) (default: 0.0)
+  -s,--samplerate DOUBLE   Sample rate in Hz (default: 2560000.0)
   -b,--bandwidth DOUBLE    Desired output bandwidth in [Hz] (0 = samplerate = no
                            resampling/decimation) (default: 0.0)
   -n,--numsamples INT      Number of samples to capture (default: 1024)
   -o,--output FILENAME     Output file(s) name (without
                            extension) (default: "output")
-  -d,--devname NAME        Soapy device/driver name (default: "rtlsdr")
   --demod ARG              Demodulation type (default: DeNo)
   -a,--agc DOUBLE          Enable AGC with squelch threshold in [dB] (0 = no
                            AGC) (default: 0.0)
@@ -77,10 +79,11 @@ Available options:
   -m,--mix                 Instead of outputting separate file for each channel,
                            mix them into one
   -h,--help                Show this help text
-
 ```
 
-Blue arrows a choices in signal flow. First choice is usage channelizer.
+Blue arrows a choices in signal flow. First choice the data source:
+SoapySDR compatible SDR receiver, or a CF32 samples file.
+Next choice is usage of the PFB channelizer.
 If it's enabled, then the output signals can be written
 to separate files, or mixed together and written into one file.
 The raw/modulated signal output file format is CF32.
@@ -178,6 +181,22 @@ ends up 6400000 bytes long. One CF32 sample is 8 bytes, so at 3.2MSPS we're capt
 Then processing it and saving around 122MB in 10 seconds.
 
 ![ex1_5](images/ex1_5.gif)
+
+#### Example 4
+
+Capturing raw CF32 IQ samples file and demodulating offline.
+
+Capturing to file `input.cf32`:
+
+```sh
+cabal v2-run -- soapy-sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeNo" -o input
+```
+
+Demodulating captured file (remember, samplerate is the bandwidth of the previous command):
+
+```sh
+cabal v2-run -- soapy-sdr --filename input.cf32 -n 2000000 -s 192000 --demod "DeWBFM 4 WAV"
+```
 
 ## TODO
   - [ ] add live playback via PulseAudio

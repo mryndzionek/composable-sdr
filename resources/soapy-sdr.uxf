@@ -12,10 +12,10 @@
     <panel_attributes>*IQ Source*
 *(SoapySDR)*
 --
--f/--frequency
--s/--samplerate
--g/--gain
 -d/--devname
+-f/--frequency
+-g/--gain
+-s/--samplerate
 valign=top
 bg=green</panel_attributes>
     <additional_attributes/>
@@ -258,7 +258,7 @@ bg=blue</panel_attributes>
   <element>
     <id>Relation</id>
     <coordinates>
-      <x>984</x>
+      <x>1000</x>
       <y>456</y>
       <w>24</w>
       <h>96</h>
@@ -324,7 +324,9 @@ valign=top</panel_attributes>
       <w>64</w>
       <h>24</h>
     </coordinates>
-    <panel_attributes>lt=-&gt;</panel_attributes>
+    <panel_attributes>lt=-&gt;
+lw=2
+fg=blue</panel_attributes>
     <additional_attributes>10.0;10.0;60.0;10.0</additional_attributes>
   </element>
   <element>
@@ -562,5 +564,36 @@ fg=blue</panel_attributes>
     </coordinates>
     <panel_attributes>lt=..</panel_attributes>
     <additional_attributes>10.0;10.0;530.0;10.0</additional_attributes>
+  </element>
+  <element>
+    <id>UMLState</id>
+    <coordinates>
+      <x>144</x>
+      <y>536</y>
+      <w>152</w>
+      <h>80</h>
+    </coordinates>
+    <panel_attributes>*File Source*
+*(*.cf32)*
+--
+--filename
+--chunksize
+-s/--samplerate
+valign=top
+bg=green</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>288</x>
+      <y>464</y>
+      <w>64</w>
+      <h>120</h>
+    </coordinates>
+    <panel_attributes>lt=-&gt;
+lw=2
+fg=blue</panel_attributes>
+    <additional_attributes>10.0;130.0;30.0;130.0;30.0;10.0;60.0;10.0</additional_attributes>
   </element>
 </diagram>

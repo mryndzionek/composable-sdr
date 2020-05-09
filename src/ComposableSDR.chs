@@ -10,6 +10,7 @@ module ComposableSDR
   , openSource
   , readChunks
   , readBytes
+  , readFromFile
   , closeSource
   , elemSize
   , resamplerCreate
@@ -60,16 +61,15 @@ import           Data.Complex
 import           Data.List                                  (foldl', unfoldr)
 import           Data.Typeable
 
-import           Foreign.ForeignPtr                         (plusForeignPtr,
-                                                             withForeignPtr)
-import           GHC.ForeignPtr                             (mallocPlainForeignPtrBytes)
+import           Foreign.ForeignPtr (castForeignPtr, plusForeignPtr,
+                                     withForeignPtr)
+import           GHC.ForeignPtr     (mallocPlainForeignPtrBytes)
+
 
 import           Foreign.ForeignPtr.Unsafe                  (unsafeForeignPtrToPtr)
 import           Foreign.Storable.Tuple()
 
 import           System.IO                                  (stdout)
-
-import qualified Streamly.Prelude                           as S
 
 import qualified Sound.File.Sndfile                         as SF
 
@@ -87,6 +87,7 @@ import qualified Streamly.Internal.Memory.Array.Types       as AT (Array (..),
                                                                    splitAt)
 import qualified Streamly.Internal.Memory.ArrayStream       as AS
 import qualified Streamly.Memory.Array                      as A
+import qualified Streamly.Prelude                           as S
 
 data SoapyException =
   SoapyException
@@ -449,6 +450,20 @@ closeSource s = do
   try (c_SoapySDRDevice_deactivateStream dev stream 0 0)
   try (c_SoapySDRDevice_closeStream dev stream)
   try (c_SoapySDRDevice_unmake dev)
+
+readFromFile ::
+     (IsStream t, MC.MonadCatch m, MonadIO m, Monad (t m))
+  => Int
+  -> FilePath
+  -> t m (A.Array SamplesIQCF32)
+readFromFile n fp =
+  let adapt a =
+        AT.Array
+          { AT.aStart = castForeignPtr $ AT.aStart a
+          , AT.aEnd = castPtr $ AT.aEnd a
+          , AT.aBound = castPtr $ AT.aBound a
+          }
+   in adapt <$> FS.toChunksWithBufferOf (elemSize * n) fp
 
 {#pointer msresamp_crcf as MsResampCrcf#}
 

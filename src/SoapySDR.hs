@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Wno-missing-signatures #-}
+
 module Main where
 
 import qualified Data.Map            as M
@@ -23,23 +25,51 @@ data Demod
   | DeAM CS.AudioFormat
   deriving (Show, Read)
 
+data SoapySDRInputCfg = SoapySDRInputCfg
+  { _devname   :: String
+  , _frequency :: Double
+  , _gain      :: Double
+  }
+
+data FileInputCfg = FileInputCfg
+  { _filename  :: FilePath
+  , _chunkSize :: Int
+  }
+
+data InputCfg
+  = ISoapy SoapySDRInputCfg
+  | IFile FileInputCfg
+
 data Opts = Opts
-  { _frequency  :: Double
+  { _input      :: InputCfg
   , _samplerate :: Double
-  , _gain       :: Double
   , _bandwidth  :: Double
   , _numsamples :: Int
   , _outname    :: String
-  , _devname    :: String
   , _demod      :: Demod
   , _agc        :: Float
   , _channels   :: Int
   , _mix        :: Bool
   }
 
-parser :: Parser Opts
-parser =
-  Opts <$>
+parseFileInput :: Parser FileInputCfg
+parseFileInput =
+  FileInputCfg <$>
+  strOption
+    (long "filename" <> showDefault <> metavar "NAME" <>
+     help "Input (CF32) file name") <*>
+  option
+    auto
+    (long "chunksize" <> help "Chunk size ins CF32 sample" <> showDefault <>
+     value 1024 <>
+     metavar "INT")
+
+parseSDRInput :: Parser SoapySDRInputCfg
+parseSDRInput =
+  SoapySDRInputCfg <$>
+  strOption
+    (long "devname" <> showDefault <> value "rtlsdr" <> metavar "NAME" <>
+     help "Soapy device/driver name") <*>
   option
     auto
     (long "frequency" <> short 'f' <> help "Rx frequency in Hz" <> showDefault <>
@@ -47,13 +77,20 @@ parser =
      metavar "DOUBLE") <*>
   option
     auto
-    (long "samplerate" <> short 's' <> help "Sample rate in Hz" <> showDefault <>
-     value 2.56e6 <>
-     metavar "DOUBLE") <*>
-  option
-    auto
     (long "gain" <> short 'g' <> help "SDR gain level (0 = auto)" <> showDefault <>
      value 0 <>
+     metavar "DOUBLE")
+
+parseInput :: Parser InputCfg
+parseInput = (IFile <$> parseFileInput) <|> (ISoapy <$> parseSDRInput)
+
+parser :: Parser Opts
+parser =
+  Opts <$> parseInput <*>
+  option
+    auto
+    (long "samplerate" <> short 's' <> help "Sample rate in Hz" <> showDefault <>
+     value 2.56e6 <>
      metavar "DOUBLE") <*>
   option
     auto
@@ -73,10 +110,6 @@ parser =
     (long "output" <> short 'o' <> showDefault <> value "output" <>
      metavar "FILENAME" <>
      help "Output file(s) name (without extension)") <*>
-  strOption
-    (long "devname" <> short 'd' <> showDefault <> value "rtlsdr" <>
-     metavar "NAME" <>
-     help "Soapy device/driver name") <*>
   option
     auto
     (long "demod" <> help "Demodulation type" <> showDefault <> value DeNo) <*>
@@ -110,99 +143,110 @@ main = run =<< execParser opts
          progDesc "Process samples from an SDR retrieved via SoapySDR" <>
          header "soapy-sdr")
 
-sdrProcess :: Opts -> IO ()
-sdrProcess opts = do
-  src <-
-    CS.openSource
-      (_devname opts)
-      (_samplerate opts)
-      (_frequency opts)
-      (_gain opts)
-  let ns = fromIntegral $ _numsamples opts
-      getResampler sr bw
-        | bw == 0 = return (Prelude.id, pure ())
-        | otherwise = do
-          let resamp_rate = realToFrac (bw / sr)
-          rs <- CS.resamplerCreate resamp_rate 60.0
-          return (S.mapM (CS.resample rs), CS.resamplerDestroy rs)
-      agc =
-        if _agc opts /= 0.0
-          then CS.automaticGainControl (_agc opts)
-          else Control.Category.id
-  (resampler, resClean) <- getResampler (_samplerate opts) (_bandwidth opts)
-  let prep = CS.takeNArr ns . resampler . CS.readChunks
-      assembleFold sink demod name nc =
-        let sinks =
-              fmap
-                (\n -> CS.addPipe demod (sink $ name ++ "_ch" ++ show n))
-                [1 .. nc]
-         in CS.addPipe
-              CS.dcBlocker
-              (if nc > 1
-                 then CS.compact (nch * 4 * 1024) $
-                      if _mix opts
-                        then CS.addPipe
-                               (CS.mix .
-                                CS.mux (replicate nch demod) .
-                                CS.firpfbchChannelizer nc)
-                               (sink name)
-                        else CS.addPipe
-                               (CS.firpfbchChannelizer nc)
-                               (CS.distribute_ sinks)
-                 else CS.addPipe demod (sink name))
-      nch = _channels opts
-      getAudioSink decim fmt chn =
-        let srOut =
-              round
-                (if _bandwidth opts == 0
-                   then _samplerate opts
-                   else _bandwidth opts) `div`
-              decim
-         in CS.audioFileSink fmt (srOut `div` nch) (_numsamples opts) chn
-      runFold fdl = S.fold fdl (prep src)
-  case _demod opts of
-    DeNo ->
-      runFold
-        (assembleFold (\n -> CS.fileSink $ n ++ ".cf32") agc (_outname opts) nch)
-    DeNBFM kf fmt ->
-      runFold
-        (assembleFold
-           (getAudioSink 1 fmt 1)
-           (CS.fmDemodulator kf . agc)
-           (_outname opts)
-           nch)
-    DeWBFM decim fmt ->
-      runFold
-        (assembleFold
-           (getAudioSink decim fmt 1)
-           (CS.wbFMDemodulator (_bandwidth opts) decim . agc)
-           (_outname opts)
-           nch)
-    DeFMS decim fmt -> do
-      let sink = getAudioSink decim fmt 2 (_outname opts)
-      dec <- CS.stereoFMDecoder (_bandwidth opts) decim sink
-      runFold $ CS.addPipe (CS.fmDemodulator 0.8 . agc) dec
-    DeAM fmt ->
-      runFold
-        (assembleFold
-           (getAudioSink 1 fmt 1)
-           (CS.amDemodulator . agc)
-           (_outname opts)
-           nch)
-  resClean
-  CS.closeSource src
-
-run :: Opts -> IO ()
-run opts = do
+initSoapySource sr sc = do
   devs <- CS.enumerate
   let dnames = mapMaybe (M.lookup "driver" . M.fromList) devs
-      dev = _devname opts
+      dev = _devname sc
   case length dnames of
-    0 -> putStrLn "No SDR devices detected"
+    0 -> putStrLn "No SDR devices detected" >> return Nothing
     _ -> do
       putStrLn $ "Available devices: " ++ show dnames
       if dev `elem` dnames
         then do
           putStrLn $ "Using device: " ++ dev
-          sdrProcess opts
-        else putStrLn $ "Device " ++ dev ++ " not found"
+          src <- CS.openSource (_devname sc) sr (_frequency sc) (_gain sc)
+          return $ Just (CS.readChunks src, CS.closeSource src)
+        else do
+          putStrLn $ "Device " ++ dev ++ " not found"
+          return Nothing
+
+initFileSource cs fp = return $ Just (CS.readFromFile cs fp, return ())
+
+sdrProcess :: Opts -> IO ()
+sdrProcess opts = do
+  mSrc <-
+    case _input opts of
+      ISoapy c -> initSoapySource (_samplerate opts) c
+      IFile c  -> initFileSource (_chunkSize c) (_filename c)
+  case mSrc of
+    Just (src, csrc) -> do
+      let ns = fromIntegral $ _numsamples opts
+          getResampler sr bw
+            | bw == 0 = return (Prelude.id, pure ())
+            | otherwise = do
+              let resamp_rate = realToFrac (bw / sr)
+              rs <- CS.resamplerCreate resamp_rate 60.0
+              return (S.mapM (CS.resample rs), CS.resamplerDestroy rs)
+          agc =
+            if _agc opts /= 0.0
+              then CS.automaticGainControl (_agc opts)
+              else Control.Category.id
+      (resampler, resClean) <- getResampler (_samplerate opts) (_bandwidth opts)
+      let prep = CS.takeNArr ns . resampler
+          assembleFold sink demod name nc =
+            let sinks =
+                  fmap
+                    (\n -> CS.addPipe demod (sink $ name ++ "_ch" ++ show n))
+                    [1 .. nc]
+             in CS.addPipe
+                  CS.dcBlocker
+                  (if nc > 1
+                     then CS.compact (nch * 4 * 1024) $
+                          if _mix opts
+                            then CS.addPipe
+                                   (CS.mix .
+                                    CS.mux (replicate nch demod) .
+                                    CS.firpfbchChannelizer nc)
+                                   (sink name)
+                            else CS.addPipe
+                                   (CS.firpfbchChannelizer nc)
+                                   (CS.distribute_ sinks)
+                     else CS.addPipe demod (sink name))
+          nch = _channels opts
+          outBW =
+            if _bandwidth opts == 0
+              then _samplerate opts
+              else _bandwidth opts
+          getAudioSink decim fmt chn =
+            let srOut = round outBW `div` decim
+             in CS.audioFileSink fmt (srOut `div` nch) (_numsamples opts) chn
+          runFold fdl = S.fold fdl (prep src)
+      case _demod opts of
+        DeNo ->
+          runFold
+            (assembleFold
+               (\n -> CS.fileSink $ n ++ ".cf32")
+               agc
+               (_outname opts)
+               nch)
+        DeNBFM kf fmt ->
+          runFold
+            (assembleFold
+               (getAudioSink 1 fmt 1)
+               (CS.fmDemodulator kf . agc)
+               (_outname opts)
+               nch)
+        DeWBFM decim fmt ->
+          runFold
+            (assembleFold
+               (getAudioSink decim fmt 1)
+               (CS.wbFMDemodulator outBW decim . agc)
+               (_outname opts)
+               nch)
+        DeFMS decim fmt -> do
+          let sink = getAudioSink decim fmt 2 (_outname opts)
+          dec <- CS.stereoFMDecoder outBW decim sink
+          runFold $ CS.addPipe (CS.fmDemodulator 0.8 . agc) dec
+        DeAM fmt ->
+          runFold
+            (assembleFold
+               (getAudioSink 1 fmt 1)
+               (CS.amDemodulator . agc)
+               (_outname opts)
+               nch)
+      resClean
+      csrc
+    Nothing -> return ()
+
+run :: Opts -> IO ()
+run = sdrProcess
