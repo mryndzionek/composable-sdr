@@ -6,9 +6,9 @@ import qualified Data.Map            as M
 import           Data.Maybe          (mapMaybe)
 import           Data.Semigroup      ((<>))
 
-import           Control.Category    (Category (..))
+import           Control.Category    (Category (..), id)
 import           Options.Applicative
-import           Prelude             hiding ((.))
+import           Prelude             hiding (id, (.))
 
 import qualified ComposableSDR       as CS
 
@@ -29,20 +29,22 @@ data SoapySDRInputCfg = SoapySDRInputCfg
   { _devname   :: String
   , _frequency :: Double
   , _gain      :: Double
-  }
+  } deriving (Show)
 
 data FileInputCfg = FileInputCfg
   { _filename  :: FilePath
   , _chunkSize :: Int
-  }
+  } deriving (Show)
 
 data InputCfg
   = ISoapy SoapySDRInputCfg
   | IFile FileInputCfg
+  deriving (Show)
 
 data Opts = Opts
   { _input      :: InputCfg
   , _samplerate :: Double
+  , _offset     :: Float
   , _bandwidth  :: Double
   , _numsamples :: Int
   , _outname    :: String
@@ -50,7 +52,7 @@ data Opts = Opts
   , _agc        :: Float
   , _channels   :: Int
   , _mix        :: Bool
-  }
+  } deriving (Show)
 
 parseFileInput :: Parser FileInputCfg
 parseFileInput =
@@ -91,6 +93,10 @@ parser =
     auto
     (long "samplerate" <> short 's' <> help "Sample rate in Hz" <> showDefault <>
      value 2.56e6 <>
+     metavar "DOUBLE") <*>
+  option
+    auto
+    (long "offset" <> help "Offset frequency in Hz" <> showDefault <> value 0.0 <>
      metavar "DOUBLE") <*>
   option
     auto
@@ -172,17 +178,23 @@ sdrProcess opts = do
     Just (src, csrc) -> do
       let ns = fromIntegral $ _numsamples opts
           getResampler sr bw
-            | bw == 0 = return (Prelude.id, pure ())
-            | otherwise = do
+            | bw == 0 = id
+            | otherwise =
               let resamp_rate = realToFrac (bw / sr)
-              rs <- CS.resamplerCreate resamp_rate 60.0
-              return (S.mapM (CS.resample rs), CS.resamplerDestroy rs)
+               in CS.resampler resamp_rate 60.0
           agc =
             if _agc opts /= 0.0
               then CS.automaticGainControl (_agc opts)
-              else Control.Category.id
-      (resampler, resClean) <- getResampler (_samplerate opts) (_bandwidth opts)
-      let prep = CS.takeNArr ns . resampler
+              else id
+      let resampler = getResampler (_samplerate opts) (_bandwidth opts)
+          offset
+            | f == 0 = id
+            | f > 0 = CS.mixDown f
+            | otherwise = CS.mixUp (-f)
+            where
+              f = 2 * pi * _offset opts / realToFrac (_samplerate opts)
+      (process, cleanup) <- CS.unPipe (resampler . offset)
+      let prep = CS.takeNArr ns . process
           assembleFold sink demod name nc =
             let sinks =
                   fmap
@@ -244,7 +256,7 @@ sdrProcess opts = do
                (CS.amDemodulator . agc)
                (_outname opts)
                nch)
-      resClean
+      cleanup
       csrc
     Nothing -> return ()
 

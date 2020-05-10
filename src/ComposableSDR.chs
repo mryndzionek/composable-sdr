@@ -13,9 +13,9 @@ module ComposableSDR
   , readFromFile
   , closeSource
   , elemSize
-  , resamplerCreate
-  , resample
-  , resamplerDestroy
+  , resampler
+  , mixUp
+  , mixDown
   , fmDemodulator
   , wbFMDemodulator
   , stereoFMDecoder
@@ -34,6 +34,7 @@ module ComposableSDR
   , mux
   , tee
   , addPipe
+  , unPipe
   , compact
   , delay
   , AudioFormat(..)
@@ -57,17 +58,19 @@ import           Control.Exception                          (Exception, throwIO)
 import           Control.Monad
 import qualified Control.Monad.Catch                        as MC
 import           Control.Monad.State
+import qualified Control.Monad.Trans.Control                as MTC
+
 import           Data.Complex
 import           Data.List                                  (foldl', unfoldr)
 import           Data.Typeable
 
-import           Foreign.ForeignPtr (castForeignPtr, plusForeignPtr,
-                                     withForeignPtr)
-import           GHC.ForeignPtr     (mallocPlainForeignPtrBytes)
-
+import           Foreign.ForeignPtr                         (castForeignPtr,
+                                                             plusForeignPtr,
+                                                             withForeignPtr)
+import           GHC.ForeignPtr                             (mallocPlainForeignPtrBytes)
 
 import           Foreign.ForeignPtr.Unsafe                  (unsafeForeignPtrToPtr)
-import           Foreign.Storable.Tuple()
+import           Foreign.Storable.Tuple                     ()
 
 import           System.IO                                  (stdout)
 
@@ -88,6 +91,7 @@ import qualified Streamly.Internal.Memory.Array.Types       as AT (Array (..),
 import qualified Streamly.Internal.Memory.ArrayStream       as AS
 import qualified Streamly.Memory.Array                      as A
 import qualified Streamly.Prelude                           as S
+
 
 data SoapyException =
   SoapyException
@@ -523,6 +527,18 @@ resamplerDestroy :: MsResampCrcf -> IO ()
 resamplerDestroy r
   | r == nullPtr = return ()
   | otherwise = c_msresamp_crcf_destroy r
+
+resampler ::
+     Float -> Float -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
+resampler r as = Pipe (resamplerCreate r as) resample resamplerDestroy
+
+unPipe :: (IsStream t, MonadIO m,
+          MTC.MonadBaseControl IO m,
+          MC.MonadThrow m) =>
+          Pipe m a b -> m (t m a -> t m b, m ())
+unPipe (Pipe creat process dest) = do
+  r <- creat
+  return (S.mapM (process r), dest r)
 
 addPipe :: MonadIO m => Pipe m a b -> FL.Fold m b c -> FL.Fold m a c
 addPipe (Pipe creat process dest) (FL.Fold step1 start1 done1) =

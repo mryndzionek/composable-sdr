@@ -54,9 +54,10 @@ I/Q recorder and processor using SoapySDR as backend.
 ```
 Usage: soapy-sdr [--filename NAME [--chunksize INT] | [--devname NAME] 
                    [-f|--frequency DOUBLE] [-g|--gain DOUBLE]] 
-                 [-s|--samplerate DOUBLE] [-b|--bandwidth DOUBLE] 
-                 [-n|--numsamples INT] [-o|--output FILENAME] [--demod ARG] 
-                 [-a|--agc DOUBLE] [-c|--channels INT] [-m|--mix]
+                 [-s|--samplerate DOUBLE] [--offset DOUBLE] 
+                 [-b|--bandwidth DOUBLE] [-n|--numsamples INT] 
+                 [-o|--output FILENAME] [--demod ARG] [-a|--agc DOUBLE] 
+                 [-c|--channels INT] [-m|--mix]
   Process samples from an SDR retrieved via SoapySDR
 
 Available options:
@@ -66,6 +67,7 @@ Available options:
   -f,--frequency DOUBLE    Rx frequency in Hz (default: 1.0e8)
   -g,--gain DOUBLE         SDR gain level (0 = auto) (default: 0.0)
   -s,--samplerate DOUBLE   Sample rate in Hz (default: 2560000.0)
+  --offset DOUBLE          Offset frequency in Hz (default: 0.0)
   -b,--bandwidth DOUBLE    Desired output bandwidth in [Hz] (0 = samplerate = no
                            resampling/decimation) (default: 0.0)
   -n,--numsamples INT      Number of samples to capture (default: 1024)
@@ -79,6 +81,7 @@ Available options:
   -m,--mix                 Instead of outputting separate file for each channel,
                            mix them into one
   -h,--help                Show this help text
+
 ```
 
 Blue arrows a choices in signal flow. First choice the data source:
@@ -93,10 +96,6 @@ Some captures from ISM 433MHz
 
 ![spectrum1](images/inspectrum1.png)
 ![spectrum2](images/inspectrum2.png)
-
-AGC with squelch enabled
-
-![spectrum4](images/inspectrum4.png)
 
 LoRa on 868MHz
 
@@ -186,17 +185,36 @@ Then processing it and saving around 122MB in 10 seconds.
 
 Capturing raw CF32 IQ samples file and demodulating offline.
 
-Capturing to file `input.cf32`:
+Capturing a slice of FM band at maximum samplerate (3.2MSPS) of RTL-SDR to a file `input.cf32`.
+192MS is about a minute of recording and 24MB/s, so overall 1.43GB of data:
 
 ```sh
-cabal v2-run -- soapy-sdr -n 2000000 -f 92.0e6 -b 192000 --demod "DeNo" -o input
+cabal v2-run -- soapy-sdr -n 192000000 -f 91.0e6 -s 3.2e6 --demod "DeNo" -o input
 ```
 
-Demodulating captured file (remember, samplerate is the bandwidth of the previous command):
+I've tuned to 91MHz and we now that at 92MHz there a station. Lets mix down and resample
+192kHz wide slice of this part of the spectrum:
 
 ```sh
-cabal v2-run -- soapy-sdr --filename input.cf32 -n 2000000 -s 192000 --demod "DeWBFM 4 WAV"
+cabal v2-run -- soapy-sdr --filename input.cf32 -n 192000000 -s 3200000 \
+--offset 1.0e6 -b 192000 --demod "DeNo"
 ```
+
+Then we can demodulate the extracted slice of spectrum:
+
+```sh
+cabal v2-run -- soapy-sdr --filename output.cf32 -n 192000000 -s 192000 --demod "DeWBFM 4 WAV"
+```
+
+#### Example 5
+
+Demodulating signal from a sensor transmitting on 433MHz ISM band (software AGC with squelch enabled):
+
+```sh
+cabal v2-run -- soapy-sdr -n 200000 -f 434.388e6 -b 20000 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 30 -a -50
+```
+
+![spectrum4](images/inspectrum4.png)
 
 ## TODO
   - [ ] add live playback via PulseAudio

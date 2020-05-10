@@ -18,7 +18,7 @@ library
   exposed-modules:     ComposableSDR
   build-depends:       base ^>=4.12, bytestring, mtl,
                        streamly, fusion-plugin,
-                       hsndfile, exceptions, storable-tuple
+                       hsndfile, exceptions, storable-tuple, monad-control
   hs-source-dirs:      src
   include-dirs:        src
   build-tool-depends:  c2hs:c2hs
