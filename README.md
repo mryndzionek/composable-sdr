@@ -15,7 +15,9 @@ DSP. All those low-level C/C++ libraries are fine for 'programming in the small'
 'programming in the large' code gets ugly really fast. And here is where Haskell comes in.
 The idea is to use C/C++ interop to 'lift' low-level APIs to streams and folds in [Streamly](https://hackage.haskell.org/package/streamly).
 The hope is to create a framework in which efficient DSP is possible and without sacrificing
-code quality even for complex signal processing flows.
+code quality even for complex signal processing flows. In other words this will be a 'vehicle'
+to connect [liquid-dsp](https://github.com/jgaeddert/liquid-dsp) functions into more complex and powerful topologies
+while preserving desired non-functional requirements.
 
 This repo will stay fairly low-level. The applications built using provided processing blocks
 should be lean and mean, so that it's possible to deploy them on even not-so-powerful, embedded,
@@ -91,6 +93,13 @@ If it's enabled, then the output signals can be written
 to separate files, or mixed together and written into one file.
 The raw/modulated signal output file format is CF32.
 Files can be opened in [inspectrum](https://github.com/miek/inspectrum).
+
+There is an experimental [AppImage](https://appimage.org/) deployment workflow producing
+self-contained binaries from every commit pushed to `build` branch. SoapyRTLSDR module
+is bundled inside the image. Other modules should be detectable from the host system
+as long they reside in standard path (`/usr/local/lib/SoapySDR/modulesx.y`, etc.) and
+are compiled with compatible versions. This however wasn't tested much and long-term
+the safest solution might be bundling all the (tested/supported) SoapySDR modules.
 
 Some captures from ISM 433MHz
 
@@ -222,3 +231,4 @@ cabal v2-run -- soapy-sdr -n 200000 -f 434.388e6 -b 20000 -s 1.0e6 --demod "DeNB
   - [ ] profile flows and introduce concurrency modifiers (`aheadly`, etc.)
   - [ ] Template Haskell boilerplate code generator for Liquid-DSP blocks
   - [ ] general cleanup - some structure is already emerging, so moving things to separate modules would be in order
+  - [ ] add automatic tests (IQ .cf32 files can be read already, so having a set of them for testing different processing configurations would be a good idea)
