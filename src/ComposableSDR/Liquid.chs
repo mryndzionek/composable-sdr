@@ -1,19 +1,8 @@
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleInstances         #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 
-module ComposableSDR
-  ( enumerate
-  , fileSink
-  , stdOutSink
-  , audioFileSink
-  , openSource
-  , readChunks
-  , readBytes
-  , readFromFile
-  , closeSource
-  , elemSize
-  , resampler
+module ComposableSDR.Liquid
+  ( resampler
   , mixUp
   , mixDown
   , fmDemodulator
@@ -27,447 +16,35 @@ module ComposableSDR
   , firpfbchChannelizer
   , realToComplex
   , complexToReal
-  , takeNArr
-  , foldArray
-  , distribute_
-  , mix
-  , mux
-  , tee
-  , addPipe
-  , unPipe
-  , compact
-  , delay
-  , AudioFormat(..)
-  , SamplesIQCF32
   ) where
+
+import           Foreign.Marshal.Alloc
+import           Foreign.Marshal.Array                hiding (newArray)
+import           Prelude                              hiding ((.))
+
+import           Control.Category                     (Category (..))
+import           Control.Monad
+
+import           Data.Complex
+import           Data.List                            (unfoldr)
+
+import           GHC.ForeignPtr                       (mallocPlainForeignPtrBytes)
+
+import           Foreign.ForeignPtr.Unsafe            (unsafeForeignPtrToPtr)
+
+import qualified Streamly.Internal.Data.Fold.Types    as FL
+import qualified Streamly.Internal.Memory.Array.Types as AT (Array (..),
+                                                             shrinkToFit,
+                                                             splitAt)
+import qualified Streamly.Memory.Array                as A
+
+import           ComposableSDR.Trans
+import           ComposableSDR.Types
+import           ComposableSDR.Common
 
 #include <SoapySDR/Device.h>
 #include <SoapySDR/Formats.h>
 #include <liquid/liquid.h>
-
-import           Foreign.C.String
-import           Foreign.C.Types
-import           Foreign.Marshal.Alloc
-import           Foreign.Marshal.Array                      hiding (newArray)
-import           Foreign.Ptr
-import           Foreign.Storable
-import           Prelude                                    hiding ((.))
-
-import           Control.Category                           (Category (..))
-import           Control.Exception                          (Exception, throwIO)
-import           Control.Monad
-import qualified Control.Monad.Catch                        as MC
-import           Control.Monad.State
-import qualified Control.Monad.Trans.Control                as MTC
-
-import           Data.Complex
-import           Data.List                                  (foldl', unfoldr)
-import           Data.Typeable
-
-import           Foreign.ForeignPtr                         (castForeignPtr,
-                                                             plusForeignPtr,
-                                                             withForeignPtr)
-import           GHC.ForeignPtr                             (mallocPlainForeignPtrBytes)
-
-import           Foreign.ForeignPtr.Unsafe                  (unsafeForeignPtrToPtr)
-import           Foreign.Storable.Tuple                     ()
-
-import           System.IO                                  (stdout)
-
-import qualified Sound.File.Sndfile                         as SF
-
-import qualified Streamly.Internal.Data.Fold                as F
-import qualified Streamly.Internal.Data.Fold.Types          as FL
-import qualified Streamly.Internal.Data.Stream.StreamD.Type as D
-import           Streamly.Internal.Data.Stream.StreamK.Type (IsStream)
-import qualified Streamly.Internal.FileSystem.File          as FS
-import qualified Streamly.Internal.FileSystem.Handle        as FH
-import qualified Streamly.Internal.Memory.Array.Types       as AT (Array (..),
-                                                                   newArray,
-                                                                   newArray,
-                                                                   shrinkToFit,
-                                                                   spliceTwo,
-                                                                   splitAt)
-import qualified Streamly.Internal.Memory.ArrayStream       as AS
-import qualified Streamly.Memory.Array                      as A
-import qualified Streamly.Prelude                           as S
-
-
-data SoapyException =
-  SoapyException
-  deriving (Show, Typeable)
-
-data Pipe m a b = forall r. Pipe 
-  { _start :: m r
-  , _process :: r -> a -> m b
-  , _done :: r -> m ()
-  }
-
-compose :: Monad m => Pipe m b c -> Pipe m a b -> Pipe m a c
-compose (Pipe start1 process1 done1) (Pipe start2 process2 done2) =
-  Pipe start process done
-  where
-    start = (,) <$> start1 <*> start2
-    done (r1, r2) = done2 r2 >> done1 r1
-    process (r1, r2) = process2 r2 >=> process1 r1
-
-instance Monad m => Category (Pipe m) where
-  id = Pipe (return ()) (const return) (const $ return ())
-  (.) = compose
-
-instance Monad m => Functor (Pipe m a) where
-  fmap f (Pipe start process done) =
-    Pipe start (\r a -> fmap f (process r a)) done
-
-instance Exception SoapyException
-
-newtype Array a = Array
-  { fromArray :: AT.Array a
-  }
-
-toArray :: AT.Array a -> Array a
-toArray = Array
-
-mapA :: (Storable a, Storable b) => (a -> b) -> A.Array a -> A.Array b
-mapA f = A.fromList . fmap f . A.toList
-
-instance Storable a => SF.Buffer Array a where
-    fromForeignPtr fp i n =
-      withForeignPtr fp $ \p -> do
-        let v =
-              AT.Array
-                { AT.aStart = fp `plusForeignPtr` i
-                , AT.aEnd = p `plusPtr` (i + n)
-                , AT.aBound = p `plusPtr` (i + n)
-                }
-        return $ toArray v
-
-    toForeignPtr = return . (\x -> (AT.aStart x, 0, A.length x)) . fromArray
-
-data AudioFormat
-  = AU
-  | WAV
-  deriving (Show, Read)
-
-type ArrayPipe m a b = Pipe m (A.Array a) (A.Array b)
-type Demodulator = ArrayPipe IO SamplesIQCF32 Float
-
-data SoapySource = SoapySource
-  { _dev      :: Ptr SoapySDRDevice
-  , _stream   :: Ptr SoapySDRStream
-  }
-
-elemSize :: Int
-elemSize = 8
-
-sampleFormat :: String
-sampleFormat = "CF32"
-
-type SamplesIQCF32 = Complex CFloat
-
-try :: (MonadIO m, Num a, Ord a) => m a -> m ()
-try a = a >>= (\s -> when (s < 0) $ liftIO $ throwIO SoapyException)
-
-{#pointer *SoapySDRKwargs as SoapySDRKwargs#}
-
-_get :: Ptr b -> (Ptr b -> IO (Ptr CString)) -> IO [String]
-_get args getter = do
-  s <- fromIntegral <$> getSize args
-  k <- getter args
-  traverse (peekElemOff k >=> peekCString) [0 .. s - 1]
-
-getKeys, getValues :: Ptr b -> IO (Ptr (Ptr CChar))
-getKeys = {#get SoapySDRKwargs->keys#}
-getValues = {#get SoapySDRKwargs->vals#}
-
-setKeys, setValues :: Ptr b -> Ptr (Ptr CChar) -> IO ()
-setKeys = {#set SoapySDRKwargs->keys#}
-setValues = {#set SoapySDRKwargs->vals#}
-
-setSize :: Ptr b -> CULong -> IO ()
-setSize = {#set SoapySDRKwargs->size#}
-
-getSize :: Ptr b -> IO CULong
-getSize = {#get SoapySDRKwargs->size#}
-
-allocArgs :: [(String, String)] -> IO (Ptr SoapySDRKwargs)
-allocArgs a = do
-  as <- calloc
-  let s = length a
-  ks <- mallocArray s
-  vs <- mallocArray s
-  kp <- mapM (newCString . fst) a
-  vp <- mapM (newCString . snd) a
-  pokeArray ks kp
-  pokeArray vs vp
-  setKeys as ks
-  setValues as vs
-  setSize as $ fromIntegral s
-  return as
-
-freeArgs :: Ptr SoapySDRKwargs -> IO ()
-freeArgs pa = do
-  s <- fromIntegral <$> getSize pa
-  ks <- getKeys pa
-  vs <- getValues pa
-  pk <- peekArray s ks
-  pv <- peekArray s vs
-  mapM_ free pk
-  mapM_ free pv
-  free ks
-  free vs
-  free pa
-
-takeNArr ::
-     (IsStream t, Storable a, MonadIO m)
-  => Int
-  -> t m (AT.Array a)
-  -> t m (AT.Array a)
-takeNArr n = S.map fst . S.takeWhile ((/= 0) . snd) . foldArrL
-  where
-    foldArrL = S.postscan fld
-    fld =
-      FL.Fold
-        (\(_, l) a -> return $ update a l)
-        ((,) <$> liftIO (AT.newArray 0) <*> return 0)
-        return
-    update a l =
-      let togo = n - l
-       in if togo == 0
-            then (a, 0)
-            else if togo >= A.length a
-                   then (a, l + A.length a)
-                   else (trim a togo, n)
-    trim a l =
-      if l < A.length a
-        then fst $ AT.splitAt l a
-        else a
-
-compact ::
-     Storable a => Int -> FL.Fold IO (A.Array a) b -> FL.Fold IO (A.Array a) b
-compact n (FL.Fold step1 start1 done1) = FL.Fold step start done
-  where
-    start = do
-      s <- start1
-      let a0 = A.fromList []
-      return (s, a0)
-    done (s, b) = do
-      s' <- step1 s b
-      done1 s'
-    step (s, b) a =
-      let m = A.length b + A.length a
-       in if m >= n
-            then do
-              ba <- AT.spliceTwo b a
-              (a', b') <-
-                if m == n
-                  then do
-                    let a0 = A.fromList []
-                    return (ba, a0)
-                  else return $ AT.splitAt n ba
-              s' <- step1 s a'
-              return (s', b')
-            else do
-              ba <- AT.spliceTwo b a
-              return (s, ba)
-
-delay ::
-     (MonadIO m, Storable a, Num a)
-  => Int
-  -> FL.Fold m (A.Array (a, a)) b
-  -> FL.Fold m (A.Array a) b
-delay n (FL.Fold step1 start1 done1) = FL.Fold step start done
-  where
-    start = do
-      s <- start1
-      let a0 = A.fromList (replicate n 0)
-      return (s, a0)
-    done (s, b) = do
-      s' <- step1 s (A.fromList $ zip (A.toList b) (repeat 0))
-      done1 s'
-    step (s, b) a = do
-      ba <- AT.spliceTwo b a
-      let (a', b') = AT.splitAt (A.length a - n) ba
-      s' <- step1 s (A.fromList $ zip (A.toList a) (A.toList a'))
-      return (s', b')
-
-{-# INLINABLE fileSink #-}
-fileSink :: (MonadIO m, MC.MonadCatch m, Storable a) => FilePath -> FL.Fold m (A.Array a) ()
-fileSink = FS.writeChunks
-
-{-# INLINABLE stdOutSink #-}
-stdOutSink :: (MonadIO m, MC.MonadCatch m, Storable a) => FL.Fold m (A.Array a) ()
-stdOutSink = FH.writeChunks stdout
-
-foreign import ccall unsafe "SoapySDRDevice_enumerate"
-    c_SoapySDRDevice_enumerate :: Ptr SoapySDRKwargs -> Ptr CSize -> IO (Ptr SoapySDRKwargs)
-
-foreign import ccall unsafe "SoapySDRKwargsList_clear"
-    c_SoapySDRKwargsList_clear :: Ptr SoapySDRKwargs -> CSize -> IO ()
-
-enumerate :: IO [[(String, String)]]
-enumerate =
-  alloca $ \s -> do
-    ptr <- c_SoapySDRDevice_enumerate nullPtr s
-    sz <- peek s
-    let as = foldl' (\b a -> advancePtr ptr a : b) [] [0 .. fromIntegral sz - 1]
-    let ex b = do
-          ks <- _get b getKeys
-          vs <- _get b getValues
-          return $ zip ks vs
-    res <- mapM ex as
-    c_SoapySDRKwargsList_clear ptr sz
-    return res
-
-{#pointer *SoapySDRDevice as SoapySDRDevice#}
-
-foreign import ccall unsafe "SoapySDRDevice_make" c_SoapySDRDevice_make
-  :: Ptr SoapySDRKwargs -> IO (Ptr SoapySDRDevice)
-
-foreign import ccall unsafe "SoapySDRDevice_unmake" c_SoapySDRDevice_unmake
-  :: Ptr SoapySDRDevice -> IO CInt
-
-soapySdrRx :: CInt
-soapySdrRx = 1
-
-foreign import ccall unsafe "SoapySDRDevice_setSampleRate" c_SoapySDRDevice_setSampleRate
-  :: Ptr SoapySDRDevice -> CInt -> CSize -> CDouble -> IO CInt
-
-foreign import ccall unsafe "SoapySDRDevice_setFrequency" c_SoapySDRDevice_setFrequency
-  :: Ptr SoapySDRDevice ->
-  CInt -> CSize -> CDouble -> Ptr SoapySDRKwargs -> IO CInt
-
-foreign import ccall unsafe "SoapySDRDevice_setGain" c_SoapySDRDevice_setGain
-  :: Ptr SoapySDRDevice ->
-  CInt -> CSize -> CDouble -> IO CString
-
-foreign import ccall unsafe "SoapySDRDevice_setGainMode" c_SoapySDRDevice_setGainMode
-  :: Ptr SoapySDRDevice ->
-  CInt -> CSize -> CUChar -> IO CInt
-
-createSoapyDevice ::
-     String -> Double -> Double -> Double -> IO (Ptr SoapySDRDevice)
-createSoapyDevice dn sr freq gain = do
-  args <- allocArgs [("driver", dn)]
-  dev <- c_SoapySDRDevice_make args
-  freeArgs args
-  try (c_SoapySDRDevice_setSampleRate dev soapySdrRx 0 (CDouble sr))
-  try (c_SoapySDRDevice_setFrequency dev soapySdrRx 0 (CDouble freq) nullPtr)
-  if gain == 0.0
-    then try (c_SoapySDRDevice_setGainMode dev soapySdrRx 0 1)
-    else do
-      s <- c_SoapySDRDevice_setGain dev soapySdrRx 0 (CDouble gain)
-      if s == nullPtr
-        then return ()
-        else throwIO SoapyException
-  return dev
-
-{#pointer *SoapySDRStream as SoapySDRStream#}
-
-foreign import ccall unsafe "SoapySDRDevice_setupStream" c_SoapySDRDevice_setupStream
-  :: Ptr SoapySDRDevice ->
-  CInt ->
-    CString ->
-      Ptr CSize -> CSize -> Ptr SoapySDRKwargs -> IO (Ptr SoapySDRStream)
-
-foreign import ccall unsafe "SoapySDRDevice_activateStream" c_SoapySDRDevice_activateStream
-  :: Ptr SoapySDRDevice ->
-  Ptr SoapySDRStream -> CInt -> CLLong -> CSize -> IO CInt
-
-foreign import ccall unsafe "SoapySDRDevice_deactivateStream" c_SoapySDRDevice_deactivateStream
-  :: Ptr SoapySDRDevice ->
-  Ptr SoapySDRStream -> CInt -> CLLong -> IO CInt
-
-foreign import ccall unsafe "SoapySDRDevice_readStream" c_SoapySDRDevice_readStream
-  :: Ptr SoapySDRDevice ->
-  Ptr SoapySDRStream ->
-    Ptr (Ptr ()) -> CSize -> Ptr CInt -> Ptr CLLong -> CLong -> IO CInt
-
-foreign import ccall unsafe "SoapySDRDevice_closeStream" c_SoapySDRDevice_closeStream
-  :: Ptr SoapySDRDevice -> Ptr SoapySDRStream -> IO CInt
-
-foreign import ccall unsafe "SoapySDRDevice_getStreamMTU" c_SoapySDRDevice_getStreamMTU
-  :: Ptr SoapySDRDevice -> Ptr SoapySDRStream -> IO CSize
-
-openSource :: String -> Double -> Double -> Double -> IO SoapySource
-openSource dn sr freq gain = do
-  dev <- createSoapyDevice dn sr freq gain
-  fmt <- newCString sampleFormat
-  args <- allocArgs [("buffers", "30")]
-  stream <- c_SoapySDRDevice_setupStream dev soapySdrRx fmt nullPtr 0 args
-  freeArgs args
-  when (stream == nullPtr) $ throwIO SoapyException
-  free fmt
-  try (c_SoapySDRDevice_activateStream dev stream 0 0 0)
-  return $ SoapySource dev stream
-
-{-# INLINABLE _read #-}
-_read :: (MonadIO m) => SoapySource -> m (AT.Array SamplesIQCF32)
-_read src =
-  liftIO $ do
-    numsamples <-
-      fromIntegral <$> c_SoapySDRDevice_getStreamMTU (_dev src) (_stream src)
-    ptr <- mallocPlainForeignPtrBytes (elemSize * numsamples)
-    withForeignPtr ptr $ \p ->
-      alloca $ \flags ->
-        alloca $ \timeNs ->
-          alloca $ \bp -> do
-            poke bp p
-            s <-
-              c_SoapySDRDevice_readStream
-                (_dev src)
-                (_stream src)
-                (castPtr bp)
-                (fromIntegral numsamples)
-                flags
-                timeNs
-                1000000
-            let s' = max 0 s
-                v =
-                  AT.Array
-                    { AT.aStart = ptr
-                    , AT.aEnd = p `plusPtr` (elemSize * numsamples)
-                    , AT.aBound = p `plusPtr` (elemSize * fromIntegral s')
-                    }
-            AT.shrinkToFit v
-
-{-# INLINE [1] readChunks #-}
-readChunks ::
-     (MonadIO m, IsStream t) => SoapySource -> t m (AT.Array SamplesIQCF32)
-readChunks s = D.fromStreamD (D.Stream step ())
-  where
-    {-# INLINE [0] step #-}
-    step _ _ = do
-      arr <- _read s
-      return $
-        case A.length arr of
-          0 -> D.Stop
-          _ -> D.Yield arr ()
-
-{-# INLINE readBytes #-}
-readBytes :: (MonadIO m, IsStream t) => SoapySource -> t m SamplesIQCF32
-readBytes s = AS.concat $ readChunks s
-
-closeSource :: SoapySource -> IO ()
-closeSource s = do
-  let (dev, stream) = (_dev s, _stream s)
-  try (c_SoapySDRDevice_deactivateStream dev stream 0 0)
-  try (c_SoapySDRDevice_closeStream dev stream)
-  try (c_SoapySDRDevice_unmake dev)
-
-readFromFile ::
-     (IsStream t, MC.MonadCatch m, MonadIO m, Monad (t m))
-  => Int
-  -> FilePath
-  -> t m (A.Array SamplesIQCF32)
-readFromFile n fp =
-  let adapt a =
-        AT.Array
-          { AT.aStart = castForeignPtr $ AT.aStart a
-          , AT.aEnd = castPtr $ AT.aEnd a
-          , AT.aBound = castPtr $ AT.aBound a
-          }
-   in adapt <$> FS.toChunksWithBufferOf (elemSize * n) fp
 
 {#pointer msresamp_crcf as MsResampCrcf#}
 
@@ -531,30 +108,6 @@ resamplerDestroy r
 resampler ::
      Float -> Float -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
 resampler r as = Pipe (resamplerCreate r as) resample resamplerDestroy
-
-unPipe :: (IsStream t, MonadIO m,
-          MTC.MonadBaseControl IO m,
-          MC.MonadThrow m) =>
-          Pipe m a b -> m (t m a -> t m b, m ())
-unPipe (Pipe creat process dest) = do
-  r <- creat
-  return (S.mapM (process r), dest r)
-
-addPipe :: MonadIO m => Pipe m a b -> FL.Fold m b c -> FL.Fold m a c
-addPipe (Pipe creat process dest) (FL.Fold step1 start1 done1) =
-  FL.Fold step start done
-  where
-    start = do
-      s <- start1
-      r <- creat
-      return (s, r, process r)
-    done (s, r, _) = do
-      dest r
-      done1 s
-    step (s, r, f) a = do
-      b <- f a
-      s' <- step1 s b
-      return (s', r, f)
 
 {#pointer freqdem as FreqDem#}
 
@@ -639,57 +192,6 @@ amdemodDestroy = c_ampmodem_destroy
 
 amDemodulator :: Demodulator
 amDemodulator = Pipe amdemodCreate amDemod amdemodDestroy
-
-openAudioFile :: AudioFormat -> FilePath -> Int -> Int -> Int -> IO SF.Handle
-openAudioFile fmt fp sr sn nch = SF.openFile (fp ++ ext) SF.WriteMode info
-  where
-    sfFmt AU  = (SF.HeaderFormatAu, ".au")
-    sfFmt WAV = (SF.HeaderFormatWav, ".wav")
-    (sff, ext) = sfFmt fmt
-    info =
-      SF.Info sn sr nch (SF.Format sff SF.SampleFormatFloat SF.EndianBig) 1 False
-
-writeToAudioFile :: (MonadIO m, SF.Sample a) => SF.Handle -> A.Array a -> m ()
-writeToAudioFile h a = do
-  _ <- liftIO $ SF.hPutBuffer h (toArray a)
-  return ()
-
-closeAudioFile :: SF.Handle -> IO ()
-closeAudioFile = SF.hClose
-
-audioFileSink ::
-     (MC.MonadCatch m, MonadIO m, SF.Sample a)
-  => AudioFormat
-  -> Int
-  -> Int
-  -> Int
-  -> String
-  -> FL.Fold m (A.Array a) ()
-audioFileSink fmt sr sn nch fp =
-  let wav = openAudioFile fmt fp sr sn nch
-   in bracketIO wav closeAudioFile (F.drainBy . writeToAudioFile)
-
-foldArray :: Storable a => (A.Array a -> IO b) -> FL.Fold IO (A.Array a) b
-foldArray = FL.Fold AT.spliceTwo (AT.newArray 0)
-
-{-# INLINE bracketIO #-}
-bracketIO ::
-     (MC.MonadCatch m, MonadIO m)
-  => IO r
-  -> (r -> IO c)
-  -> (r -> FL.Fold m a b)
-  -> FL.Fold m a b
-bracketIO bef aft bet = FL.Fold step initial extract
-  where
-    initial = do
-      res <- liftIO bef
-      return (bet res, res)
-    step (fld', res) x = do
-      r <- FL.runStep fld' x `MC.onException` liftIO (aft res)
-      return (r, res)
-    extract (FL.Fold _ initial1 extract1, res) = do
-      _ <- liftIO $ aft res
-      initial1 >>= extract1
 
 {#pointer firdecim_rrrf as FirDecim#}
 
@@ -1089,48 +591,6 @@ firpfbchChan (fb, nco, nch) a = do
 firpfbchChannelizer ::
      Int -> Pipe IO (A.Array SamplesIQCF32) [A.Array SamplesIQCF32]
 firpfbchChannelizer n = Pipe (firpfbchCreate n) firpfbchChan firpfbchDestroy
-
-distribute_ :: MonadIO m => [FL.Fold m a b] -> FL.Fold m [a] ()
-distribute_ fs = FL.Fold step initial extract
-  where
-    initial =
-      mapM (\(FL.Fold s i e) -> i >>= \r -> return (FL.Fold s (return r) e)) fs
-    step ss as = do
-      zipWithM_ (\(FL.Fold s i _) a -> i >>= \r -> void (s r a)) ss as
-      return ss
-    extract = mapM_ (\(FL.Fold _ i e) -> i >>= \r -> e r)
-
-mix :: (MonadIO m, Num a, Storable a) => Pipe m [A.Array a] (A.Array a)
-mix =
-  let f a1 a2 = A.fromList $ zipWith (+) (A.toList a1) (A.toList a2)
-   in foldl1 f <$> Control.Category.id
-
-mux :: Monad m => [Pipe m a b] -> Pipe m [a] [b]
-mux ps = Pipe start process done
-  where
-    start = mapM (\(Pipe s p d) -> s >>= \r -> return (Pipe (return r) p d)) ps
-    process = zipWithM (\(Pipe s p _) a -> s >>= \r -> p r a)
-    done = mapM_ (\(Pipe s _ d) -> s >>= \r -> d r)
-
-tee ::
-     (Monad m, Storable b, Storable c)
-  => ArrayPipe m a b
-  -> ArrayPipe m a c
-  -> ArrayPipe m a (b, c)
-tee (Pipe start1 process1 done1) (Pipe start2 process2 done2) =
-  Pipe start process done
-  where
-    start = (,) <$> start1 <*> start2
-    done (r1, r2) = done2 r2 >> done1 r1
-    process (r1, r2) a = do
-      b <- process1 r1 a
-      c <- process2 r2 a
-      return $ A.fromList $ zip (A.toList b) (A.toList c)
-
-lMapA :: (Storable a, Storable t) => (t -> a) -> ArrayPipe m a b -> ArrayPipe m t b
-lMapA f (Pipe start process done) = Pipe start proc done
-  where
-    proc r a = process r (mapA f a)
 
 {#pointer firfilt_crcf as FirFiltC#}
 

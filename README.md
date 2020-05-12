@@ -230,5 +230,4 @@ cabal v2-run -- soapy-sdr -n 200000 -f 434.388e6 -b 20000 -s 1.0e6 --demod "DeNB
   - [ ] add RF protocol decoders
   - [ ] profile flows and introduce concurrency modifiers (`aheadly`, etc.)
   - [ ] Template Haskell boilerplate code generator for Liquid-DSP blocks
-  - [ ] general cleanup - some structure is already emerging, so moving things to separate modules would be in order
   - [ ] add automatic tests (IQ .cf32 files can be read already, so having a set of them for testing different processing configurations would be a good idea)
