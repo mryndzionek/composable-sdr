@@ -3,11 +3,16 @@ module ComposableSDR.Source
   , readChunks
   , readBytes
   , closeSource
+  , openAudioFile
+  , readFromAudioFile
+  , closeAudioFile
   , enumerate
   , readFromFile
   ) where
 
 #include <SoapySDR/Device.h>
+
+import           Prelude                                    hiding ((.))
 
 import           Foreign.C.String
 import           Foreign.Marshal.Alloc
@@ -16,10 +21,14 @@ import           Foreign.Marshal.Array                      hiding (newArray)
 import           GHC.ForeignPtr                             (mallocPlainForeignPtrBytes)
 
 import           Data.List                                  (foldl')
+import           Data.Maybe                                 (fromJust, isJust)
 
+import           Control.Category                           (Category (..))
 import           Control.Exception                          (throwIO)
 import           Control.Monad
 import qualified Control.Monad.Catch                        as MC
+
+import qualified Sound.File.Sndfile                         as SF
 
 import qualified Streamly.Internal.Data.Stream.StreamD.Type as D
 import           Streamly.Internal.Data.Stream.StreamK.Type (IsStream)
@@ -31,6 +40,10 @@ import qualified Streamly.Internal.Memory.Array.Types       as AT (Array (..),
 import qualified Streamly.Internal.Memory.ArrayStream       as AS
 
 import           ComposableSDR.Common
+import           ComposableSDR.Liquid                       (mixUp,
+                                                             realToComplex)
+import           ComposableSDR.Types
+
 
 data SoapySource = SoapySource
   { _dev      :: Ptr SoapySDRDevice
@@ -256,3 +269,39 @@ readFromFile n fp =
           , AT.aBound = castPtr $ AT.aBound a
           }
    in adapt <$> FS.toChunksWithBufferOf (elemSize * n) fp
+
+openAudioFile ::
+     IsStream t
+  => FilePath
+  -> IO ( SF.Handle
+        , t IO (AT.Array Float) -> t IO (AT.Array SamplesIQCF32)
+        , IO ())
+openAudioFile fp = do
+  h <- SF.openFile fp SF.ReadMode SF.defaultInfo
+  let f = 2 * pi * 0.5
+      info = SF.hInfo h
+  when (SF.channels info /= 1) (throwIO SoapyException)
+  (p, c) <- unPipe (mixUp f . realToComplex)
+  return (h, p, c)
+
+closeAudioFile :: (SF.Handle, a, IO ()) -> IO ()
+closeAudioFile (h, _, c) = SF.hClose h >> c
+
+-- TODO: add proper processing according to hInfo
+readFromAudioFile ::
+     (IsStream t, MonadIO m, MonadIO (t m))
+  => Int
+  -> (SF.Handle, t m (A.Array Float) -> t m (A.Array SamplesIQCF32), c)
+  -> t m (A.Array SamplesIQCF32)
+readFromAudioFile n (h, p, _) = p $ D.fromStreamD (D.Stream step ())
+  where
+    {-# INLINE [0] step #-}
+    step _ _ = do
+      ms <- liftIO $ SF.hGetBuffer h n
+      let arr = fromArray $ fromJust ms
+      return $
+        if isJust ms
+          then case A.length arr of
+                 0 -> D.Stop
+                 _ -> D.Yield arr ()
+          else D.Stop

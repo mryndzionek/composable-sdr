@@ -1,6 +1,3 @@
-{-# LANGUAGE FlexibleInstances         #-}
-{-# LANGUAGE MultiParamTypeClasses     #-}
-
 module ComposableSDR.Liquid
   ( resampler
   , mixUp
@@ -264,8 +261,8 @@ realToComplex = Pipe firhilbCreate firhilbDecim firhilbDestroy
 firhilbInterp ::
      MonadIO m => FirHilb -> A.Array SamplesIQCF32 -> m (A.Array Float)
 firhilbInterp f a =
-  let n = (fromIntegral $ A.length a)
-   in wrap n (2 * 4 * n) (c_firhilbf_interp_execute_block f) a
+  let n = 2 * (fromIntegral $ A.length a)
+   in wrap n (4 * n) (c_firhilbf_interp_execute_block f) a
 
 complexToReal :: ArrayPipe IO SamplesIQCF32 Float
 complexToReal = Pipe firhilbCreate firhilbInterp firhilbDestroy

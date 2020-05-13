@@ -1,6 +1,3 @@
-{-# LANGUAGE FlexibleInstances         #-}
-{-# LANGUAGE MultiParamTypeClasses     #-}
-
 module ComposableSDR
   ( module ComposableSDR.Source
   , module ComposableSDR.Sink
