@@ -7,6 +7,8 @@ import           Data.Maybe          (mapMaybe)
 import           Data.Semigroup      ((<>))
 
 import           Control.Category    (Category (..), id)
+import           Control.Exception   (fromException, try)
+
 import           Options.Applicative
 import           Prelude             hiding (id, (.))
 
@@ -166,7 +168,14 @@ initSoapySource sr sc = do
           putStrLn $ "Device " ++ dev ++ " not found"
           return Nothing
 
-initFileSource cs fp = return $ Just (CS.readFromFile cs fp, return ())
+initFileSource cs fp = do
+  eh <- try (CS.openAudioFile fp)
+  case eh of
+    Left e ->
+      case fromException e of
+        Just CS.SoapyException -> return Nothing
+        Nothing -> return $ Just (CS.readFromFile cs fp, return ())
+    Right h -> return $ Just (CS.readFromAudioFile cs h, CS.closeAudioFile h)
 
 sdrProcess :: Opts -> IO ()
 sdrProcess opts = do
@@ -258,7 +267,7 @@ sdrProcess opts = do
                nch)
       cleanup
       csrc
-    Nothing -> return ()
+    Nothing -> putStrLn $ "Unable to open source: " ++ show (_input opts)
 
 run :: Opts -> IO ()
 run = sdrProcess
