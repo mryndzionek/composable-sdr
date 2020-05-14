@@ -142,7 +142,7 @@ parser =
      showDefault)
 
 main :: IO ()
-main = run =<< execParser opts
+main = sdrProcess =<< execParser opts
   where
     opts =
       info
@@ -268,6 +268,4 @@ sdrProcess opts = do
       cleanup
       csrc
     Nothing -> putStrLn $ "Unable to open source: " ++ show (_input opts)
-
-run :: Opts -> IO ()
-run = sdrProcess
+    
