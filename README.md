@@ -51,6 +51,8 @@ All the C-interop and Streamly streams and folds - one file for now.
 
 I/Q recorder and processor using SoapySDR as backend.
 
+#### :warning: All the below screenshots are from other applications. This is purely CLI application.
+
 ![soapy-sdr](images/soapy-sdr.png)
 
 ```
