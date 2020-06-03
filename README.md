@@ -55,6 +55,14 @@ I/Q recorder and processor using SoapySDR as backend.
 
 ![soapy-sdr](images/soapy-sdr.png)
 
+Blue arrows a choices in signal flow. First choice the data source:
+SoapySDR compatible SDR receiver, or a CF32 samples file.
+Next choice is usage of the PFB channelizer.
+If it's enabled, then the output signals can be written
+to separate files, or mixed together and written into one file.
+The raw/modulated signal output file format is CF32.
+Files can be opened in [inspectrum](https://github.com/miek/inspectrum).
+
 ```
 Usage: soapy-sdr [--filename NAME [--chunksize INT] | [--devname NAME] 
                    [-f|--frequency DOUBLE] [-g|--gain DOUBLE]] 
@@ -87,14 +95,6 @@ Available options:
   -h,--help                Show this help text
 
 ```
-
-Blue arrows a choices in signal flow. First choice the data source:
-SoapySDR compatible SDR receiver, or a CF32 samples file.
-Next choice is usage of the PFB channelizer.
-If it's enabled, then the output signals can be written
-to separate files, or mixed together and written into one file.
-The raw/modulated signal output file format is CF32.
-Files can be opened in [inspectrum](https://github.com/miek/inspectrum).
 
 There is an experimental [AppImage](https://appimage.org/) deployment workflow producing
 self-contained binaries from every commit pushed to `build` branch. SoapyRTLSDR module
