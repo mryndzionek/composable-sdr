@@ -6,6 +6,7 @@ module ComposableSDR.Liquid
   , wbFMDemodulator
   , stereoFMDecoder
   , amDemodulator
+  , fskDemodulator
   , firDecimator
   , automaticGainControl
   , iirFilter
@@ -20,6 +21,7 @@ import           Foreign.Marshal.Array                hiding (newArray)
 import           Prelude                              hiding ((.))
 
 import           Control.Category                     (Category (..))
+import           Control.Exception                    (throwIO)
 import           Control.Monad
 
 import           Data.Complex
@@ -35,9 +37,9 @@ import qualified Streamly.Internal.Memory.Array.Types as AT (Array (..),
                                                              splitAt)
 import qualified Streamly.Memory.Array                as A
 
+import           ComposableSDR.Common
 import           ComposableSDR.Trans
 import           ComposableSDR.Types
-import           ComposableSDR.Common
 
 #include <SoapySDR/Device.h>
 #include <SoapySDR/Formats.h>
@@ -106,6 +108,25 @@ resampler ::
      Float -> Float -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
 resampler r as = Pipe (resamplerCreate r as) resample resamplerDestroy
 
+wrap ::
+     (MonadIO m, Storable a, Storable b)
+  => Int -> Int
+  -> (Ptr a -> CUInt -> Ptr b -> IO ())
+  -> A.Array a
+  -> m (A.Array b)
+wrap ny nyb cdem x =
+  liftIO $ do
+    fy <- mallocPlainForeignPtrBytes nyb
+    withForeignPtr fy $ \y -> do
+      cdem (castPtr . unsafeForeignPtrToPtr $ AT.aStart x) (fromIntegral ny) y
+      let v =
+            AT.Array
+              { AT.aStart = fy
+              , AT.aEnd = y `plusPtr` nyb
+              , AT.aBound = y `plusPtr` nyb
+              }
+      AT.shrinkToFit v
+
 {#pointer freqdem as FreqDem#}
 
 foreign import ccall unsafe "freqdem_create" c_freqdem_create
@@ -127,25 +148,6 @@ fmdemodCreate kf = do
   c_freqdem_print d
   return d
 
-wrap ::
-     (MonadIO m, Storable a, Storable b)
-  => Int -> Int
-  -> (Ptr a -> CUInt -> Ptr b -> IO ())
-  -> A.Array a
-  -> m (A.Array b)
-wrap ny nyb cdem x =
-  liftIO $ do
-    fy <- mallocPlainForeignPtrBytes nyb
-    withForeignPtr fy $ \y -> do
-      cdem (castPtr . unsafeForeignPtrToPtr $ AT.aStart x) (fromIntegral ny) y
-      let v =
-            AT.Array
-              { AT.aStart = fy
-              , AT.aEnd = y `plusPtr` nyb
-              , AT.aBound = y `plusPtr` nyb
-              }
-      AT.shrinkToFit v
-
 fmDemod ::
      (MonadIO m) => FreqDem -> AT.Array SamplesIQCF32 -> m (AT.Array Float)
 fmDemod d a =
@@ -157,6 +159,52 @@ fmdemodDestroy = c_freqdem_crcf_destroy
 
 fmDemodulator :: Float -> Demodulator 
 fmDemodulator kf = Pipe (fmdemodCreate kf) fmDemod fmdemodDestroy
+
+{#pointer fskdem as FskDem#}
+
+foreign import ccall unsafe "fskdem_create" c_fskdem_create
+  :: CUInt -> CUInt -> Float -> IO FskDem
+
+foreign import ccall unsafe "fskdem_print" c_fskdem_print
+  :: FskDem -> IO ()
+
+foreign import ccall unsafe "fskdem_demodulate" c_fskdem_demodulate
+  :: FskDem -> Ptr SamplesIQCF32 -> IO CUInt
+
+foreign import ccall unsafe "fskdem_destroy" c_fskdem_crcf_destroy
+  :: FskDem -> IO ()
+
+fskdem_demodulate_block ::
+     (FreqDem, CUInt) -> Ptr SamplesIQCF32 -> CUInt -> Ptr CUInt -> IO ()
+fskdem_demodulate_block (d, k) x n y = sequence_ $ fmap procs [0 .. n]
+  where
+    procs a = do
+      v <- c_fskdem_demodulate d (x `plusPtr` (fromIntegral k * fromIntegral a))
+      poke (y `plusPtr` fromIntegral a) v
+
+fskdemodCreate :: CUInt -> CUInt -> Float -> IO (FreqDem, CUInt)
+fskdemodCreate m k bw = do
+  d <- c_fskdem_create m k bw
+  putStrLn "Using FSK demodulator:"
+  c_fskdem_print d
+  return (d, k)
+
+fskDemod ::
+     (MonadIO m)
+  => (FreqDem, CUInt)
+  -> AT.Array SamplesIQCF32
+  -> m (AT.Array CUInt)
+fskDemod (d, k) a =
+  let n = fromIntegral $ A.length a
+   in do liftIO $ when (n `rem` k /= 0) (throwIO SoapyException)
+         let n' = fromIntegral $ n `div` k
+         wrap n' (4 * n') (fskdem_demodulate_block (d, k)) a
+
+fskdemodDestroy :: (FreqDem, CUInt) -> IO ()
+fskdemodDestroy (d, _) = c_fskdem_crcf_destroy d
+
+fskDemodulator :: CUInt -> CUInt -> Float -> ArrayPipe IO SamplesIQCF32 CUInt
+fskDemodulator m k bw = Pipe (fskdemodCreate m k bw) fskDemod fskdemodDestroy
 
 {#pointer ampmodem as AmpDem#}
 
