@@ -5,6 +5,7 @@ module ComposableSDR.Trans
   , mix
   , mux
   , tee
+  , distribute
   , distribute_
   , mapA
   , lMapA
@@ -102,15 +103,18 @@ delay n (FL.Fold step1 start1 done1) = FL.Fold step start done
       s' <- step1 s (A.fromList $ zip (A.toList a) (A.toList a'))
       return (s', b')
 
-distribute_ :: MonadIO m => [FL.Fold m a b] -> FL.Fold m [a] ()
-distribute_ fs = FL.Fold step initial extract
+distribute :: MonadIO m => [FL.Fold m a b] -> FL.Fold m [a] [b]
+distribute fs = FL.Fold step initial extract
   where
     initial =
       mapM (\(FL.Fold s i e) -> i >>= \r -> return (FL.Fold s (return r) e)) fs
     step ss as = do
       zipWithM_ (\(FL.Fold s i _) a -> i >>= \r -> void (s r a)) ss as
       return ss
-    extract = mapM_ (\(FL.Fold _ i e) -> i >>= \r -> e r)
+    extract = mapM (\(FL.Fold _ i e) -> i >>= \r -> e r)
+
+distribute_ :: MonadIO m => [FL.Fold m a b] -> FL.Fold m [a] ()
+distribute_ = void . distribute
 
 mix :: (MonadIO m, Num a, Storable a) => Pipe m [A.Array a] (A.Array a)
 mix =
