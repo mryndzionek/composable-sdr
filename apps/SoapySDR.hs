@@ -24,7 +24,10 @@ data Demod
            CS.AudioFormat
   | DeFMS Int
           CS.AudioFormat
-  | DeFSK Int Int
+  | DeFSK Int
+          Int
+  | DeGMSK Int
+           Int
   | DeAM CS.AudioFormat
   deriving (Show, Read)
 
@@ -205,17 +208,16 @@ sdrProcess opts = do
               f = 2 * pi * _offset opts / realToFrac (_samplerate opts)
       (process, cleanup) <- CS.unPipe (resampler . offset)
       let prep = CS.takeNArr ns . process
-          assembleFold sink demod shaper name nc =
+          assembleFold sink demod name nc m =
             let sinks =
                   fmap
-                    (\n -> assembleSink (sink $ name ++ "_ch" ++ show n))
+                    (\n -> CS.addPipe demod (sink $ name ++ "_ch" ++ show n))
                     [1 .. nc]
-                assembleSink s = shaper (CS.addPipe demod s)
              in CS.addPipe
                   CS.dcBlocker
-                  (if nc > 1
-                     then CS.compact (nch * 4 * 1024) $
-                          if _mix opts
+                  (CS.compact (m * nch * 1024) $
+                   if nc > 1
+                     then if _mix opts
                             then CS.addPipe
                                    (CS.mix .
                                     CS.mux (replicate nch demod) .
@@ -224,7 +226,7 @@ sdrProcess opts = do
                             else CS.addPipe
                                    (CS.firpfbchChannelizer nc)
                                    (CS.distribute_ sinks)
-                     else assembleSink (sink name))
+                     else CS.addPipe demod (sink name))
           nch = _channels opts
           outBW =
             if _bandwidth opts == 0
@@ -239,23 +241,26 @@ sdrProcess opts = do
           runFold
             (assembleFold
                (\n -> CS.fileSink $ n ++ ".cf32")
-               agc id
+               agc
                (_outname opts)
-               nch)
+               nch
+               4)
         DeNBFM kf fmt ->
           runFold
             (assembleFold
                (getAudioSink 1 fmt 1)
-               (CS.fmDemodulator kf . agc) id
+               (CS.fmDemodulator kf . agc)
                (_outname opts)
-               nch)
+               nch
+               4)
         DeWBFM decim fmt ->
           runFold
             (assembleFold
                (getAudioSink decim fmt 1)
-               (CS.wbFMDemodulator outBW decim . agc) id
+               (CS.wbFMDemodulator outBW decim . agc)
                (_outname opts)
-               nch)
+               nch
+               4)
         DeFMS decim fmt -> do
           let sink = getAudioSink decim fmt 2 (_outname opts)
           dec <- CS.stereoFMDecoder outBW decim sink
@@ -264,17 +269,26 @@ sdrProcess opts = do
           runFold
             (assembleFold
                (getAudioSink 1 fmt 1)
-               (CS.amDemodulator . agc) id
+               (CS.amDemodulator . agc)
                (_outname opts)
-               nch)
+               nch
+               4)
         DeFSK m k ->
           runFold
             (assembleFold
-               (\n -> CS.fileSink $ n ++ ".txt")
-               (CS.fskDemodulator (fromIntegral m) (fromIntegral k) 0.25 . agc) (CS.compact (k * 4 * 1024))
+               (\n -> CS.fileSink $ n ++ ".bin")
+               (CS.fskDemodulator (fromIntegral m) (fromIntegral k) 0.25 . agc)
                (_outname opts)
-               nch)
+               nch
+               (4 * k))
+        DeGMSK m k ->
+          runFold
+            (assembleFold
+               (\n -> CS.fileSink $ n ++ ".bin")
+               (CS.gmskDemodulator (fromIntegral m) (fromIntegral k) 0.25 . agc)
+               (_outname opts)
+               nch
+               (4 * k))
       cleanup
       csrc
     Nothing -> putStrLn $ "Unable to open source: " ++ show (_input opts)
- 

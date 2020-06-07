@@ -7,6 +7,7 @@ module ComposableSDR.Liquid
   , stereoFMDecoder
   , amDemodulator
   , fskDemodulator
+  , gmskDemodulator
   , firDecimator
   , automaticGainControl
   , iirFilter
@@ -21,7 +22,6 @@ import           Foreign.Marshal.Array                hiding (newArray)
 import           Prelude                              hiding ((.))
 
 import           Control.Category                     (Category (..))
-import           Control.Exception                    (throwIO)
 import           Control.Monad
 
 import           Data.Complex
@@ -176,11 +176,13 @@ foreign import ccall unsafe "fskdem_destroy" c_fskdem_crcf_destroy
 
 fskdem_demodulate_block ::
      (FreqDem, CUInt) -> Ptr SamplesIQCF32 -> CUInt -> Ptr CUInt -> IO ()
-fskdem_demodulate_block (d, k) x n y = sequence_ $ fmap procs [0 .. n]
+fskdem_demodulate_block (d, k) x n y = sequence_ $ fmap procs [0 .. n - 1]
   where
-    procs a = do
-      v <- c_fskdem_demodulate d (x `plusPtr` (fromIntegral k * fromIntegral a))
-      poke (y `plusPtr` fromIntegral a) v
+    procs i = do
+      let src = x `advancePtr` (fromIntegral k * fromIntegral i)
+          dst = y `advancePtr` fromIntegral i
+      v <- c_fskdem_demodulate d src
+      poke dst v
 
 fskdemodCreate :: CUInt -> CUInt -> Float -> IO (FreqDem, CUInt)
 fskdemodCreate m k bw = do
@@ -196,7 +198,7 @@ fskDemod ::
   -> m (AT.Array CUInt)
 fskDemod (d, k) a =
   let n = fromIntegral $ A.length a
-   in do liftIO $ when (n `rem` k /= 0) (throwIO SoapyException)
+   in do -- liftIO $ when (n `rem` k /= 0) (throwIO SoapyException)
          let n' = fromIntegral $ n `div` k
          wrap n' (4 * n') (fskdem_demodulate_block (d, k)) a
 
@@ -205,6 +207,53 @@ fskdemodDestroy (d, _) = c_fskdem_crcf_destroy d
 
 fskDemodulator :: CUInt -> CUInt -> Float -> ArrayPipe IO SamplesIQCF32 CUInt
 fskDemodulator m k bw = Pipe (fskdemodCreate m k bw) fskDemod fskdemodDestroy
+
+{#pointer gmskdem as GmskDem#}
+
+foreign import ccall unsafe "gmskdem_create" c_gmskdem_create
+  :: CUInt -> CUInt -> Float -> IO GmskDem
+
+foreign import ccall unsafe "gmskdem_print" c_gmskdem_print
+  :: GmskDem -> IO ()
+
+foreign import ccall unsafe "gmskdem_demodulate" c_gmskdem_demodulate
+  :: GmskDem -> Ptr SamplesIQCF32 -> Ptr CUInt -> IO ()
+
+foreign import ccall unsafe "gmskdem_destroy" c_gmskdem_crcf_destroy
+  :: GmskDem -> IO ()
+
+gmskdem_demodulate_block ::
+     (GmskDem, CUInt) -> Ptr SamplesIQCF32 -> CUInt -> Ptr CUInt -> IO ()
+gmskdem_demodulate_block (d, k) x n y = sequence_ $ fmap procs [0 .. n - 1]
+  where
+    procs i = do
+      let src = x `advancePtr` (fromIntegral k * fromIntegral i)
+          dst = y `advancePtr` fromIntegral i
+      c_gmskdem_demodulate d src dst
+
+gmskdemodCreate :: CUInt -> CUInt -> Float -> IO (FreqDem, CUInt)
+gmskdemodCreate m k bw = do
+  d <- c_gmskdem_create k m bw
+  putStrLn "Using GMSK demodulator:"
+  c_gmskdem_print d
+  return (d, k)
+
+gmskDemod ::
+     (MonadIO m)
+  => (FreqDem, CUInt)
+  -> AT.Array SamplesIQCF32
+  -> m (AT.Array CUInt)
+gmskDemod (d, k) a =
+  let n = fromIntegral $ A.length a
+   in do -- liftIO $ when (n `rem` k /= 0) (throwIO SoapyException)
+         let n' = fromIntegral $ n `div` k
+         wrap n' (4 * n') (gmskdem_demodulate_block (d, k)) a
+
+gmskdemodDestroy :: (FreqDem, CUInt) -> IO ()
+gmskdemodDestroy (d, _) = c_gmskdem_crcf_destroy d
+
+gmskDemodulator :: CUInt -> CUInt -> Float -> ArrayPipe IO SamplesIQCF32 CUInt
+gmskDemodulator m k bw = Pipe (gmskdemodCreate m k bw) gmskDemod gmskdemodDestroy
 
 {#pointer ampmodem as AmpDem#}
 
