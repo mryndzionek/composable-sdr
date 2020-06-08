@@ -1,5 +1,6 @@
 module ComposableSDR.Liquid
   ( resampler
+  , symTracker
   , mixUp
   , mixDown
   , fmDemodulator
@@ -23,6 +24,7 @@ import           Prelude                              hiding ((.))
 
 import           Control.Category                     (Category (..))
 import           Control.Monad
+import           Control.Exception                    (throwIO)
 
 import           Data.Complex
 import           Data.List                            (unfoldr)
@@ -107,6 +109,64 @@ resamplerDestroy r
 resampler ::
      Float -> Float -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
 resampler r as = Pipe (resamplerCreate r as) resample resamplerDestroy
+
+{#pointer symtrack_cccf as SymTrackCccf#}
+
+foreign import ccall unsafe "symtrack_cccf_create" c_symtrack_cccf_create
+  :: Int -> CUInt -> CUInt -> Float -> Int -> IO SymTrackCccf
+
+foreign import ccall unsafe "symtrack_cccf_print" c_symtrack_cccf_print
+  :: SymTrackCccf -> IO ()
+
+foreign import ccall unsafe "symtrack_cccf_execute_block" c_symtrack_cccf_execute_block
+  :: SymTrackCccf ->
+  Ptr SamplesIQCF32 ->
+    CUInt -> Ptr SamplesIQCF32 -> Ptr CUInt -> IO ()
+
+foreign import ccall unsafe "symtrack_cccf_destroy" c_symtrack_cccf_destroy
+  :: SymTrackCccf -> IO ()
+
+trackSym :: (MonadIO m) => SymTrackCccf -> AT.Array SamplesIQCF32 -> m (AT.Array SamplesIQCF32)
+trackSym st x =
+  liftIO $ do
+    let nx = fromIntegral $ A.length x
+        ny = fromIntegral nx
+    fy <- mallocPlainForeignPtrBytes (elemSize * ny)
+    withForeignPtr fy $ \y ->
+      alloca $ \pnwy -> do
+        c_symtrack_cccf_execute_block
+          st
+          (castPtr . unsafeForeignPtrToPtr $ AT.aStart x)
+          nx
+          y
+          pnwy
+        nwy <- fromIntegral <$> peek pnwy
+        let v =
+              AT.Array
+                { AT.aStart = fy
+                , AT.aEnd = y `plusPtr` (elemSize * nwy)
+                , AT.aBound = y `plusPtr` (elemSize * ny)
+                }
+        AT.shrinkToFit v
+
+symTrackCreate :: CUInt -> CUInt -> IO SymTrackCccf
+symTrackCreate m k = do
+  let ftype = 9 -- LIQUID_FIRFILT_RRC
+      beta = 0.25
+      ms = 21 -- LIQUID_MODEM_BPSK
+  st <- c_symtrack_cccf_create ftype k m beta ms
+  putStrLn "Using symbol tracker:"
+  c_symtrack_cccf_print st
+  return st
+
+symTrackDestroy :: SymTrackCccf -> IO ()
+symTrackDestroy st
+  | st == nullPtr = return ()
+  | otherwise = c_symtrack_cccf_destroy st
+
+symTracker ::
+     CUInt -> CUInt -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
+symTracker m k = Pipe (symTrackCreate m k) trackSym symTrackDestroy
 
 wrap ::
      (MonadIO m, Storable a, Storable b)
@@ -245,7 +305,7 @@ gmskDemod ::
   -> m (AT.Array CUInt)
 gmskDemod (d, k) a =
   let n = fromIntegral $ A.length a
-   in do -- liftIO $ when (n `rem` k /= 0) (throwIO SoapyException)
+   in do liftIO $ when (n `rem` k /= 0) (throwIO SoapyException)
          let n' = fromIntegral $ n `div` k
          wrap n' (4 * n') (gmskdem_demodulate_block (d, k)) a
 
