@@ -1,5 +1,6 @@
 module ComposableSDR.Liquid
   ( resampler
+  , symSync
   , symTracker
   , mixUp
   , mixDown
@@ -167,6 +168,68 @@ symTrackDestroy st
 symTracker ::
      CUInt -> CUInt -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
 symTracker m k = Pipe (symTrackCreate m k) trackSym symTrackDestroy
+
+{#pointer symsync_crcf as SymSyncCrcf#}
+
+foreign import ccall unsafe "symsync_crcf_create_rnyquist" c_symsync_crcf_create_rnyquist
+  :: Int -> CUInt -> CUInt -> Float -> CUInt -> IO SymSyncCrcf
+
+foreign import ccall unsafe "symsync_crcf_print" c_symsync_crcf_print
+  :: SymSyncCrcf -> IO ()
+
+foreign import ccall unsafe "symsync_crcf_set_lf_bw" c_symsync_crcf_set_lf_bw
+  :: SymSyncCrcf -> Float -> IO ()
+
+foreign import ccall unsafe "symsync_crcf_execute" c_symsync_crcf_execute
+  :: SymSyncCrcf ->
+  Ptr SamplesIQCF32 ->
+    CUInt -> Ptr SamplesIQCF32 -> Ptr CUInt -> IO ()
+
+foreign import ccall unsafe "symsync_crcf_destroy" c_symsync_crcf_destroy
+  :: SymSyncCrcf -> IO ()
+
+syncSym :: (MonadIO m) => SymSyncCrcf -> AT.Array SamplesIQCF32 -> m (AT.Array SamplesIQCF32)
+syncSym st x =
+  liftIO $ do
+    let nx = fromIntegral $ A.length x
+        ny = fromIntegral nx
+    fy <- mallocPlainForeignPtrBytes (elemSize * ny)
+    withForeignPtr fy $ \y ->
+      alloca $ \pnwy -> do
+        c_symsync_crcf_execute
+          st
+          (castPtr . unsafeForeignPtrToPtr $ AT.aStart x)
+          nx
+          y
+          pnwy
+        nwy <- fromIntegral <$> peek pnwy
+        let v =
+              AT.Array
+                { AT.aStart = fy
+                , AT.aEnd = y `plusPtr` (elemSize * nwy)
+                , AT.aBound = y `plusPtr` (elemSize * ny)
+                }
+        AT.shrinkToFit v
+
+symSyncCreate :: CUInt -> CUInt -> IO SymSyncCrcf
+symSyncCreate m k = do
+  let ftype = 7 -- LIQUID_FIRFILT_ARKAISER
+      beta = 0.5
+      nf = 32
+  ss <- c_symsync_crcf_create_rnyquist ftype k m beta nf
+  -- c_symsync_crcf_set_lf_bw ss 0.3
+  putStrLn "Using symbol sync:"
+  c_symsync_crcf_print ss
+  return ss
+
+symSyncDestroy :: SymSyncCrcf -> IO ()
+symSyncDestroy ss
+  | ss == nullPtr = return ()
+  | otherwise = c_symsync_crcf_destroy ss
+
+symSync ::
+     CUInt -> CUInt -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
+symSync m k = Pipe (symSyncCreate m k) syncSym symSyncDestroy
 
 wrap ::
      (MonadIO m, Storable a, Storable b)
