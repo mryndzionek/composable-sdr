@@ -264,10 +264,10 @@ Not perfect, but we can try to FM demodulate with with timing recovery to get so
 
 ```sh
 cabal v2-run -- soapy-sdr --filename helicopter.wav -n 20000000000 -s 24000 \
---offset 1.8e3 -b 6.0e3 --demod "DeNBFMSync 5"
+--offset 1.8e3 -b 4.8e3 --demod "DeNBFMSync 4"
 ```
 
-The `5` signifies 5 samples per symbol (The bitrate is 1200bit/s, we resampled to 6000Hz, so 6000/1200=5).
+The `4` signifies 4 samples per symbol (The bitrate is 1200bit/s, we resampled to 4800Hz, so 4800/1200=4).
 This will result in `output.f32` file with the demodulated signal and symbols synchronized (2 samples per symbol).
 Further processing requires some trial and error.
 More info can be found [here](https://github.com/proto17/HelicopterDemod/wiki).
