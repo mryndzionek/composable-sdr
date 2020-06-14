@@ -24,10 +24,7 @@ data Demod
            CS.AudioFormat
   | DeFMS Int
           CS.AudioFormat
-  | DeFSK Int
-          Int
-  | DeGMSK Int
-           Int
+  | DeNBFMSync Int
   | DeAM CS.AudioFormat
   deriving (Show, Read)
 
@@ -273,19 +270,11 @@ sdrProcess opts = do
                (_outname opts)
                nch
                4)
-        DeFSK m k ->
+        DeNBFMSync k ->
           runFold
             (assembleFold
-               (\n -> CS.fileSink $ n ++ ".bin")
-               (CS.fskDemodulator (fromIntegral m) (fromIntegral k) 0.25 . agc)
-               (_outname opts)
-               nch
-               (4 * k))
-        DeGMSK m k ->
-          runFold
-            (assembleFold
-               (\n -> CS.fileSink $ n ++ ".bin")
-               (CS.gmskDemodulator (fromIntegral m) (fromIntegral k) 0.25 . agc)
+               (\n -> CS.fileSink $ n ++ ".f32")
+               (CS.gmskDemWithSync (fromIntegral k) . agc)
                (_outname opts)
                nch
                (4 * k))

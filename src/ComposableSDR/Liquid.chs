@@ -1,6 +1,7 @@
 module ComposableSDR.Liquid
   ( resampler
-  , symSync
+  , symSyncR
+  , symSyncC
   , symTracker
   , mixUp
   , mixDown
@@ -10,8 +11,11 @@ module ComposableSDR.Liquid
   , amDemodulator
   , fskDemodulator
   , gmskDemodulator
+  , gmskDemWithSync
   , firDecimator
   , automaticGainControl
+  , firFilterR
+  , firFilterRNyquist
   , iirFilter
   , dcBlocker
   , firpfbchChannelizer
@@ -188,31 +192,35 @@ foreign import ccall unsafe "symsync_crcf_execute" c_symsync_crcf_execute
 foreign import ccall unsafe "symsync_crcf_destroy" c_symsync_crcf_destroy
   :: SymSyncCrcf -> IO ()
 
-syncSym :: (MonadIO m) => SymSyncCrcf -> AT.Array SamplesIQCF32 -> m (AT.Array SamplesIQCF32)
-syncSym st x =
+syncSym ::
+     ( MonadIO m
+     , Storable a
+     , Storable b
+     )
+  => (t2 -> Ptr a -> CUInt -> Ptr b -> Ptr CUInt -> IO ())
+  -> Int
+  -> t2
+  -> A.Array a
+  -> m (A.Array b)
+syncSym ex s st x =
   liftIO $ do
     let nx = fromIntegral $ A.length x
         ny = fromIntegral nx
-    fy <- mallocPlainForeignPtrBytes (elemSize * ny)
+    fy <- mallocPlainForeignPtrBytes (s * ny)
     withForeignPtr fy $ \y ->
       alloca $ \pnwy -> do
-        c_symsync_crcf_execute
-          st
-          (castPtr . unsafeForeignPtrToPtr $ AT.aStart x)
-          nx
-          y
-          pnwy
+        ex st (castPtr . unsafeForeignPtrToPtr $ AT.aStart x) nx y pnwy
         nwy <- fromIntegral <$> peek pnwy
         let v =
               AT.Array
                 { AT.aStart = fy
-                , AT.aEnd = y `plusPtr` (elemSize * nwy)
-                , AT.aBound = y `plusPtr` (elemSize * ny)
+                , AT.aEnd = y `plusPtr` (s * nwy)
+                , AT.aBound = y `plusPtr` (s * ny)
                 }
         AT.shrinkToFit v
 
-symSyncCreate :: CUInt -> CUInt -> IO SymSyncCrcf
-symSyncCreate m k = do
+symSyncCCreate :: CUInt -> CUInt -> IO SymSyncCrcf
+symSyncCCreate m k = do
   let ftype = 7 -- LIQUID_FIRFILT_ARKAISER
       beta = 0.5
       nf = 32
@@ -222,14 +230,55 @@ symSyncCreate m k = do
   c_symsync_crcf_print ss
   return ss
 
-symSyncDestroy :: SymSyncCrcf -> IO ()
-symSyncDestroy ss
+symSyncCDestroy :: SymSyncCrcf -> IO ()
+symSyncCDestroy ss
   | ss == nullPtr = return ()
   | otherwise = c_symsync_crcf_destroy ss
 
-symSync ::
+symSyncC ::
      CUInt -> CUInt -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
-symSync m k = Pipe (symSyncCreate m k) syncSym symSyncDestroy
+symSyncC m k =
+  Pipe (symSyncCCreate m k) (syncSym c_symsync_crcf_execute elemSize) symSyncCDestroy
+
+{#pointer symsync_rrrf as SymSyncRrrf#}
+
+foreign import ccall unsafe "symsync_rrrf_create_kaiser" c_symsync_rrrf_create_kaiser
+  :: CUInt -> CUInt -> Float -> CUInt -> IO SymSyncRrrf
+
+foreign import ccall unsafe "symsync_rrrf_print" c_symsync_rrrf_print
+  :: SymSyncRrrf -> IO ()
+
+-- foreign import ccall unsafe "symsync_rrrf_set_lf_bw" c_symsync_rrrf_set_lf_bw
+--   :: SymSyncRrrf -> Float -> IO ()
+
+foreign import ccall unsafe "symsync_rrrf_set_output_rate" c_symsync_rrrf_set_output_rate
+  :: SymSyncRrrf -> CUInt -> IO ()
+
+foreign import ccall unsafe "symsync_rrrf_execute" c_symsync_rrrf_execute
+  :: SymSyncRrrf ->
+  Ptr Float -> CUInt -> Ptr Float -> Ptr CUInt -> IO ()
+
+foreign import ccall unsafe "symsync_rrrf_destroy" c_symsync_rrrf_destroy
+  :: SymSyncRrrf -> IO ()
+
+symSyncRCreate :: CUInt -> CUInt -> Float -> CUInt -> IO SymSyncRrrf
+symSyncRCreate k m beta _m = do
+  ss <- c_symsync_rrrf_create_kaiser k m beta _m
+  c_symsync_crcf_set_lf_bw ss 0.05
+  c_symsync_rrrf_set_output_rate ss 2
+  putStrLn "Using symbol sync:"
+  c_symsync_rrrf_print ss
+  return ss
+
+symSyncRDestroy :: SymSyncRrrf -> IO ()
+symSyncRDestroy ss
+  | ss == nullPtr = return ()
+  | otherwise = c_symsync_rrrf_destroy ss
+
+symSyncR ::
+     CUInt -> CUInt -> Float -> CUInt -> Pipe IO (A.Array Float) (A.Array Float)
+symSyncR k m beta _m =
+  Pipe (symSyncRCreate k m beta _m) (syncSym c_symsync_rrrf_execute 4) symSyncRDestroy
 
 wrap ::
      (MonadIO m, Storable a, Storable b)
@@ -377,6 +426,13 @@ gmskdemodDestroy (d, _) = c_gmskdem_crcf_destroy d
 
 gmskDemodulator :: CUInt -> CUInt -> Float -> ArrayPipe IO SamplesIQCF32 CUInt
 gmskDemodulator m k bw = Pipe (gmskdemodCreate m k bw) gmskDemod gmskdemodDestroy
+
+gmskDemWithSync :: CUInt -> Pipe IO (A.Array SamplesIQCF32) (A.Array Float)
+gmskDemWithSync k =
+  let -- mf = firFilterRNyquist k 8 0.3 0
+      ss = symSyncR k 4 0 64
+      d = fmDemodulator (0.01 * fromIntegral k)
+   in ss . d
 
 {#pointer ampmodem as AmpDem#}
 
@@ -858,6 +914,47 @@ firFilterCKaiser n fc as mu =
 firFilterC ::
      FirFiltC -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
 firFilterC f = Pipe (return f) firFiltC firfiltCDestroy
+
+{#pointer firfilt_rrrf as FirFiltR#}
+
+foreign import ccall unsafe "firfilt_rrrf_create_rnyquist" c_firfilt_rrrf_create_rnyquist
+  :: Int -> CUInt -> CUInt -> Float -> Float -> IO FirFiltR
+
+foreign import ccall unsafe "firfilt_rrrf_print" c_firfilt_rrrf_print
+  :: FirFiltR -> IO ()
+
+-- foreign import ccall unsafe "firfilt_rrrf_set_scale" c_firfilt_rrrf_set_scale
+--   :: FirFiltR -> Float -> IO ()
+
+foreign import ccall unsafe "firfilt_rrrf_execute_block" c_firfilt_rrrf_execute_block
+  :: FirFiltR -> Ptr Float -> CUInt -> Ptr Float -> IO ()
+
+foreign import ccall unsafe "firfilt_rrrf_destroy" c_firfilt_rrrf_destroy
+  :: FirFiltR -> IO ()
+
+firfiltCreateRNyquist :: CUInt -> CUInt -> Float -> Float -> IO FirFiltR
+firfiltCreateRNyquist k m beta mu = do
+  f <- c_firfilt_rrrf_create_rnyquist 12 k m beta mu -- LIQUID_FIRFILT_GMSKRX
+  c_firfilt_crcf_set_scale f (1.0 / fromIntegral k)
+  putStrLn "Using FIR filter:"
+  c_firfilt_rrrf_print f
+  return f
+
+firfiltRDestroy :: FirFiltR -> IO ()
+firfiltRDestroy = c_firfilt_rrrf_destroy
+
+firFiltR :: MonadIO m => FirFiltR -> A.Array Float -> m (A.Array Float)
+firFiltR f a =
+  let n = (fromIntegral $ A.length a)
+   in wrap n (4 * n) (c_firfilt_rrrf_execute_block f) a
+
+firFilterRNyquist :: CUInt -> CUInt -> Float -> Float -> Pipe IO (A.Array Float) (A.Array Float)
+firFilterRNyquist k m beta mu =
+  Pipe (firfiltCreateRNyquist k m beta mu) firFiltR firfiltRDestroy
+
+firFilterR ::
+     FirFiltR -> Pipe IO (A.Array Float) (A.Array Float)
+firFilterR f = Pipe (return f) firFiltR firfiltRDestroy
 
 pllCreate :: Float -> Float -> IO (Nco, Nco)
 pllCreate f bw = do

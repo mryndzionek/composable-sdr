@@ -62,3 +62,11 @@ executable cabal2appimage
   ghc-options:         -Wall -g -O0
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings, ScopedTypeVariables, FlexibleContexts
+
+executable helidecode
+  main-is:             HeliDecode.hs
+  build-depends:       base ^>=4.12, bytestring, binary, split, megaparsec, replace-megaparsec
+  hs-source-dirs:      apps
+  ghc-options:         -Wall -O2
+  default-language:    Haskell2010
+  default-extensions:  OverloadedStrings, ScopedTypeVariables, FlexibleContexts
