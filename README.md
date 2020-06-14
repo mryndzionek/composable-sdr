@@ -269,6 +269,15 @@ cabal v2-run -- soapy-sdr --filename helicopter.wav -n 20000000000 -s 24000 \
 
 The `4` signifies 4 samples per symbol (The bitrate is 1200bit/s, we resampled to 4800Hz, so 4800/1200=4).
 This will result in `output.f32` file with the demodulated signal and symbols synchronized (2 samples per symbol).
+
+Without symbol synchronizer:
+
+![ex6_5](images/ex6_5.png)
+
+With symbol synchronizer:
+
+![ex6_6](images/ex6_6.png)
+
 Further processing requires some trial and error.
 More info can be found [here](https://github.com/proto17/HelicopterDemod/wiki).
 There is a simple decoding app in this [repo](apps/HeliDecode.hs) that works slightly differently.
@@ -283,6 +292,7 @@ the app will output a KML (`output.kml`) file that can be visualized using [GpsP
 ![ex6_3](images/ex6_3.png)
 
 ![ex6_4](images/ex6_4.png)
+
 
 ## TODO
   - [ ] eliminate the need for mandatory `-n,--numsamples` argument
