@@ -15,6 +15,7 @@ import           Control.Monad              (replicateM)
 import           Text.Printf
 
 import           System.Environment         (getArgs)
+import           System.FilePath.Posix      (takeBaseName)
 
 import           Replace.Megaparsec
 import           Text.Megaparsec            hiding (State, chunk, many, parse)
@@ -140,6 +141,22 @@ toKML fp cs = do
   mapM_ (appendFile fp) ln
   appendFile fp "</Document></kml>\n"
 
+toOctave :: FilePath -> [Float] -> IO ()
+toOctave fp vs = do
+  let header = ["clear all; close all;", "k = 4; v = [];"]
+      footer =
+        [ "n = length(v); t = [0:(n-1)]/2; idx = 1:2:n;"
+        , "figure('color','white','position',[100 100 1200 400]);"
+        , "plot(t,v,'-','Color',[1 1 1]*0.6,..."
+        , "     t(idx),v(idx),'o','Color',[0 0.2 0.4]);"
+        , "axis([0 t(end) -2.5 2.5]); grid on;"
+        , "xlabel('Time [symbol index]'); ylabel('symsync output');"
+        , "print -dpng -color \"-S1200,600\" " ++ takeBaseName fp ++ ".png"
+        ]
+      body = fmap (printf "v(end+1) = %12.4e;") vs
+      lns = header ++ body ++ footer
+  writeFile fp (unlines lns)
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -157,4 +174,5 @@ main = do
   let frames = decode <$> parseFrames bits
       ln = fmap (drop 2 . fmap (chr . fromIntegral)) frames
       coords = clean $ parseCoords ln
+  toOctave "output.m" $ take 20000 floats
   toKML "output.kml" coords
