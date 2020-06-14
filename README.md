@@ -268,7 +268,8 @@ cabal v2-run -- soapy-sdr --filename helicopter.wav -n 20000000000 -s 24000 \
 ```
 
 The `5` signifies 5 samples per symbol (The bitrate is 1200bit/s, we resampled to 6000Hz, so 6000/1200=5).
-This will result in `output.f32` file with the demodulated signal. Further processing requires some trial and error.
+This will result in `output.f32` file with the demodulated signal and symbols synchronized (2 samples per symbol).
+Further processing requires some trial and error.
 More info can be found [here](https://github.com/proto17/HelicopterDemod/wiki).
 There is a simple decoding app in this [repo](apps/HeliDecode.hs) that works slightly differently.
 When run like this:
