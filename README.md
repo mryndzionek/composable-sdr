@@ -55,8 +55,8 @@ I/Q recorder and processor using SoapySDR as backend.
 
 ![soapy-sdr](images/soapy-sdr.png)
 
-Blue arrows a choices in signal flow. First choice the data source:
-SoapySDR compatible SDR receiver, or a CF32 samples file.
+Blue arrows are choices in signal flow. First choice is the data source:
+SoapySDR compatible SDR receiver, or a CF32/WAV file.
 Next choice is usage of the PFB channelizer.
 If it's enabled, then the output signals can be written
 to separate files, or mixed together and written into one file.
@@ -184,7 +184,8 @@ Then resample the signal to 1.6MSPS and channelize to 20 channels, writing to 20
 We request 16M sample (after resampling), so around 10s of recording:
 
 ```sh
-time cabal v2-run -- soapy-sdr -n 16000000 -f 433.9e6 -s 3.2e6 -b 1.6e6 --demod "DeNo" -g 35 -a -50 -c 20
+time cabal v2-run -- soapy-sdr -n 16000000 -f 433.9e6 -s 3.2e6 -b 1.6e6 \
+--demod "DeNo" -g 35 -a -50 -c 20
 ```
 
 Below is a GIF showing how the files are written and CPU utilization. No samples are lost and each file
@@ -223,7 +224,8 @@ cabal v2-run -- soapy-sdr --filename output.cf32 -n 192000000 -s 192000 --demod 
 Demodulating signal from a sensor transmitting on 433MHz ISM band (software AGC with squelch enabled):
 
 ```sh
-cabal v2-run -- soapy-sdr -n 200000 -f 434.388e6 -b 20000 -s 1.0e6 --demod "DeNBFM 0.3 WAV" -g 30 -a -50
+cabal v2-run -- soapy-sdr -n 200000 -f 434.388e6 -b 20000 -s 1.0e6 \
+--demod "DeNBFM 0.3 WAV" -g 30 -a -50
 ```
 
 ![spectrum4](images/inspectrum4.png)
@@ -277,6 +279,7 @@ Without symbol synchronizer:
 With symbol synchronizer:
 
 ![ex6_6](images/ex6_6.png)
+
 
 Further processing requires some trial and error.
 More info can be found [here](https://github.com/proto17/HelicopterDemod/wiki).
