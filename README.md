@@ -284,6 +284,7 @@ the app will output a KML (`output.kml`) file that can be visualized using [GpsP
 ![ex6_4](images/ex6_4.png)
 
 ## TODO
+  - [ ] eliminate the need for mandatory `-n,--numsamples` argument
   - [ ] add live playback via PulseAudio
   - [ ] add RF protocol decoders
   - [ ] profile flows and introduce concurrency modifiers (`aheadly`, etc.)
