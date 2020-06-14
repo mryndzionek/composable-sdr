@@ -274,7 +274,7 @@ sdrProcess opts = do
           runFold
             (assembleFold
                (\n -> CS.fileSink $ n ++ ".f32")
-               (CS.gmskDemWithSync (fromIntegral k) . agc)
+               (CS.fmDemWithSync (fromIntegral k) . agc)
                (_outname opts)
                nch
                (4 * k))

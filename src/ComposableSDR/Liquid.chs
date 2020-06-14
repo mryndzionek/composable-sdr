@@ -11,12 +11,13 @@ module ComposableSDR.Liquid
   , amDemodulator
   , fskDemodulator
   , gmskDemodulator
-  , gmskDemWithSync
+  , fmDemWithSync
   , firDecimator
   , automaticGainControl
   , firFilterR
   , firFilterRNyquist
   , iirFilter
+  , iirCFilter
   , dcBlocker
   , firpfbchChannelizer
   , realToComplex
@@ -427,11 +428,12 @@ gmskdemodDestroy (d, _) = c_gmskdem_crcf_destroy d
 gmskDemodulator :: CUInt -> CUInt -> Float -> ArrayPipe IO SamplesIQCF32 CUInt
 gmskDemodulator m k bw = Pipe (gmskdemodCreate m k bw) gmskDemod gmskdemodDestroy
 
-gmskDemWithSync :: CUInt -> Pipe IO (A.Array SamplesIQCF32) (A.Array Float)
-gmskDemWithSync k =
+fmDemWithSync :: CUInt -> Pipe IO (A.Array SamplesIQCF32) (A.Array Float)
+fmDemWithSync k =
   let -- mf = firFilterRNyquist k 8 0.3 0
+      -- lpf = iirCFilter 3 0.1 0.0 10.0 10.0
       ss = symSyncR k 4 0 64
-      d = fmDemodulator (0.01 * fromIntegral k)
+      d = fmDemodulator (0.02 * fromIntegral k)
    in ss . d
 
 {#pointer ampmodem as AmpDem#}
@@ -543,17 +545,17 @@ firhilbInterp f a =
 complexToReal :: ArrayPipe IO SamplesIQCF32 Float
 complexToReal = Pipe firhilbCreate firhilbInterp firhilbDestroy
 
-foreign import ccall unsafe "liquid_iirdes" c_liquid_iirdes
-  :: CInt ->
-  CInt ->
-    CInt ->
-      CUInt ->
-        Float -> Float -> Float -> Float -> Ptr Float -> Ptr Float -> IO ()
-
 {#pointer iirfilt_crcf as IirFiltC#}
 
 foreign import ccall unsafe "iirfilt_crcf_create_dc_blocker" c_iirfilt_crcf_create_dc_blocker
   :: CFloat -> IO IirFiltC
+
+foreign import ccall unsafe "iirfilt_crcf_create_prototype" c_iirfilt_crcf_create_prototype
+  :: CInt ->
+  CInt ->
+    CInt ->
+      CUInt ->
+        Float -> Float -> Float -> Float -> IO IirFiltC
 
 foreign import ccall unsafe "iirfilt_crcf_print" c_iirfilt_crcf_print
   :: IirFiltC -> IO ()
@@ -564,72 +566,11 @@ foreign import ccall unsafe "iirfilt_crcf_execute_block" c_iirfilt_crcf_execute_
 foreign import ccall unsafe "iirfilt_crcf_destroy" c_iirfilt_crcf_destroy
   :: IirFiltC -> IO ()
 
-{#pointer iirfilt_rrrf as IirFilt#}
-
-foreign import ccall unsafe "iirfilt_rrrf_create" c_iirfilt_rrrf_create
-  :: Ptr Float -> CUInt -> Ptr Float -> CUInt -> IO IirFilt
-
-foreign import ccall unsafe "iirfilt_rrrf_create_sos" c_iirfilt_rrrf_create_sos
-  :: Ptr Float -> Ptr Float -> CUInt -> IO IirFilt
-
-foreign import ccall unsafe "iirfilt_rrrf_print" c_iirfilt_rrrf_print
-  :: IirFilt -> IO ()
-
-foreign import ccall unsafe "iirfilt_rrrf_execute_block" c_iirfilt_rrrf_execute_block
-  :: IirFilt -> Ptr Float -> CUInt -> Ptr Float -> IO ()
-
-foreign import ccall unsafe "iirfilt_rrrf_destroy" c_iirfilt_rrrf_destroy
-  :: IirFilt -> IO ()
-
-iirDes :: Int -> Float -> Float -> Float -> Float -> IO IirFilt
-iirDes n fc f0 ap' as = do
-  let r = n `mod` 2 -- odd/even order
-      l = (n - r) `div` 2 -- filter semi-length
-      hLen = 3 * (l + r)
-  allocaArray hLen $ \b ->
-    allocaArray hLen $ \a
-            -- LIQUID_IIRDES_BUTTER LIQUID_IIRDES_LOWPASS LIQUID_IIRDES_SOS
-     -> do
-      c_liquid_iirdes 0 0 0 (fromIntegral n) fc f0 ap' as b a
-      c_iirfilt_rrrf_create_sos b a (fromIntegral $ l + r)
-
-iirfiltCreate :: [Float] -> [Float] -> IO IirFilt
-iirfiltCreate bt at =
-  alloca $ \pbt ->
-    alloca $ \pat -> do
-      pokeArray pbt bt
-      pokeArray pat at
-      f <-
-        c_iirfilt_rrrf_create
-          pbt
-          (fromIntegral $ length bt)
-          pat
-          (fromIntegral $ length at)
-      putStrLn "Using IIR filter:"
-      c_iirfilt_rrrf_print f
-      return f
-
-iirfiltDestroy :: IirFilt -> IO ()
-iirfiltDestroy = c_iirfilt_rrrf_destroy
-
-iirFilt ::
-     MonadIO m => IirFilt -> A.Array Float -> m (A.Array Float)
-iirFilt f a =
-  let n = (fromIntegral $ A.length a)
-   in wrap n (4 * n) (c_iirfilt_rrrf_execute_block f) a
-
-iirFilter :: [Float] -> [Float] -> ArrayPipe IO Float Float
-iirFilter bt at = Pipe (iirfiltCreate bt at) iirFilt iirfiltDestroy
-
-iirDeemphFilter ::
-     Int
-  -> Float
-  -> Float
-  -> Float
-  -> Float
-  -> Pipe IO (A.Array Float) (A.Array Float)
-iirDeemphFilter n fc f0 ap' as =
-  Pipe (iirDes n fc f0 ap' as) iirFilt iirfiltDestroy
+iirfiltCCreate :: Int -> Float -> Float -> Float -> Float -> IO IirFiltC
+iirfiltCCreate n fc f0 ap' as = do
+  f <- c_iirfilt_crcf_create_prototype 0 0 0 (fromIntegral n) fc f0 ap' as
+  c_iirfilt_crcf_print f
+  return f
 
 dcBlockerCreate :: IO IirFiltC
 dcBlockerCreate = do
@@ -650,9 +591,68 @@ dcBlocker = Pipe dcBlockerCreate iirCFilt iirfiltCDestroy
 iirfiltCDestroy :: IirFiltC -> IO ()
 iirfiltCDestroy = c_iirfilt_crcf_destroy
 
+iirFiltC ::
+     MonadIO m => IirFiltC -> A.Array SamplesIQCF32 -> m (A.Array SamplesIQCF32)
+iirFiltC f a =
+  let n = (fromIntegral $ A.length a)
+   in wrap n (elemSize * n) (c_iirfilt_crcf_execute_block f) a
+
+iirCFilter ::
+     Int
+  -> Float
+  -> Float
+  -> Float
+  -> Float
+  -> Pipe IO (A.Array SamplesIQCF32) (A.Array SamplesIQCF32)
+iirCFilter n fc f0 ap' as =
+  Pipe (iirfiltCCreate n fc f0 ap' as) iirFiltC iirfiltCDestroy
+
+{#pointer iirfilt_rrrf as IirFilt#}
+
+foreign import ccall unsafe "iirfilt_rrrf_create_prototype" c_iirfilt_rrrf_create_prototype
+  :: CInt ->
+  CInt ->
+    CInt ->
+      CUInt ->
+        Float -> Float -> Float -> Float -> IO IirFilt
+
+foreign import ccall unsafe "iirfilt_rrrf_print" c_iirfilt_rrrf_print
+  :: IirFilt -> IO ()
+
+foreign import ccall unsafe "iirfilt_rrrf_execute_block" c_iirfilt_rrrf_execute_block
+  :: IirFilt -> Ptr Float -> CUInt -> Ptr Float -> IO ()
+
+foreign import ccall unsafe "iirfilt_rrrf_destroy" c_iirfilt_rrrf_destroy
+  :: IirFilt -> IO ()
+
+iirfiltCreate :: Int -> Float -> Float -> Float -> Float -> IO IirFilt
+iirfiltCreate n fc f0 ap' as = do
+  f <- c_iirfilt_rrrf_create_prototype 0 0 0 (fromIntegral n) fc f0 ap' as
+  c_iirfilt_rrrf_print f
+  return f
+
+iirfiltDestroy :: IirFilt -> IO ()
+iirfiltDestroy = c_iirfilt_rrrf_destroy
+
+iirFilt ::
+     MonadIO m => IirFilt -> A.Array Float -> m (A.Array Float)
+iirFilt f a =
+  let n = (fromIntegral $ A.length a)
+   in wrap n (4 * n) (c_iirfilt_rrrf_execute_block f) a
+
+iirFilter ::
+     Int
+  -> Float
+  -> Float
+  -> Float
+  -> Float
+  -> Pipe IO (A.Array Float) (A.Array Float)
+iirFilter n fc f0 ap' as =
+  Pipe (iirfiltCreate n fc f0 ap' as) iirFilt iirfiltDestroy
+
 wbFMDemodulator :: Double -> Int -> Demodulator
 wbFMDemodulator quadRate decim =
-  let iirDeemph = iirDeemphFilter 2 (realToFrac $ 5000 / quadRate) 0.0 10.0 10.0
+  let iirDeemph = iirFilter 2 (realToFrac $ 5000 / quadRate) 0.0 10.0 10.0
    in firDecimator decim . iirDeemph . fmDemodulator 0.6
 
 {#pointer agc_crcf as Agc#}
@@ -1027,14 +1027,14 @@ stereoFMDecoder' quadRate decim = do
         mapA ((* kStereoGain) . ex . realPart) <$>
         firFilt (quadRate / 1350.0) (kAudioFIRCutoffHz / quadRate)
       iirDeemphL =
-        iirDeemphFilter
+        iirFilter
           kDeEmphasisOrder
           (realToFrac $ kDeEmphasisCutoffHz / quadRate)
           0.0
           10.0
           10.0
       iirDeemphR =
-        iirDeemphFilter
+        iirFilter
           kDeEmphasisOrder
           (realToFrac $ kDeEmphasisCutoffHz / quadRate)
           0.0
