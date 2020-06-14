@@ -228,6 +228,61 @@ cabal v2-run -- soapy-sdr -n 200000 -f 434.388e6 -b 20000 -s 1.0e6 --demod "DeNB
 
 ![spectrum4](images/inspectrum4.png)
 
+#### Example 6
+
+Decoding FSK data from a helicopter, similarly to [this](http://www.windytan.com/2014/02/mystery-signal-from-helicopter.html) and [this](https://github.com/proto17/HelicopterDemod/wiki).
+First lets download the audio containing FSK signal from [youtube](https://www.youtube.com/watch?v=2MprHxarmOI) using [youtube-dl](https://youtube-dl.org/):
+
+```sh
+youtube-dl -x --audio-format wav https://www.youtube.com/watch?v=2MprHxarmOI
+```
+
+The file has two channels, so convert it to mono using [Audacity](https://www.audacityteam.org/).
+Open the WAV in Auadacity and then `Tracks -> Mix -> 'Mix Stereo down to Mono'`. Finally save the converted file and rename it to `helicopter.wav`.
+Convert the WAV file to IQ (.cf32) data file for analysis using [inspectrum](https://github.com/miek/inspectrum):
+
+```sh
+cabal v2-run -- soapy-sdr --filename helicopter.wav -n 19200000000 -s 24000 --demod "DeNo"
+```
+
+In inspectrum we see the signal between 1.2kHz and 2.4kHz:
+
+![ex6_1](images/ex6_1.png)
+
+Lets now try filter out and FM demodulate the signal:
+
+```sh
+cabal v2-run -- soapy-sdr --filename helicopter.wav -n 20000000000 -s 24000 \
+--offset 1.8e3 -b 6.0e3 --demod "DeNBFM 0.6 WAV"
+```
+
+In the resulting WAV file (`output.wav`) we should see something resembling a square wave:
+
+![ex6_2](images/ex6_2.png)
+
+Not perfect, but we can try to FM demodulate with with timing recovery to get something workable:
+
+```sh
+cabal v2-run -- soapy-sdr --filename helicopter.wav -n 20000000000 -s 24000 \
+--offset 1.8e3 -b 6.0e3 --demod "DeNBFMSync 5"
+```
+
+The `5` signifies 5 samples per symbol (The bitrate is 1200bit/s, we resampled to 6000Hz, so 6000/1200=5).
+This will result in `output.f32` file with the demodulated signal. Further processing requires some trial and error.
+More info can be found [here](https://github.com/proto17/HelicopterDemod/wiki).
+There is a simple decoding app in this [repo](apps/HeliDecode.hs) that works slightly differently.
+When run like this:
+
+```sh
+cabal v2-run -- helidecode output.f32
+```
+
+the app will output a KML (`output.kml`) file that can be visualized using [GpsPrune](https://activityworkshop.net/software/gpsprune/):
+
+![ex6_3](images/ex6_3.png)
+
+![ex6_4](images/ex6_4.png)
+
 ## TODO
   - [ ] add live playback via PulseAudio
   - [ ] add RF protocol decoders
