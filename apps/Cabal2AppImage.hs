@@ -22,6 +22,9 @@ appName = "soapy-sdr"
 appDir :: String
 appDir = appName ++ ".AppDir"
 
+addApps :: [String]
+addApps = ["helidecode"]
+
 strip :: String -> IO ()
 strip fp = callProcess "strip" [fp]
 
@@ -119,18 +122,19 @@ main = do
   hd <- getHomeDirectory
   ex <- excludeList
   ps <- ldd (hd ++ "/.cabal/bin/" ++ appName) >>= follow
+  ads <- mapM (ldd >=> follow) $ fmap (\n -> hd ++ "/.cabal/bin/" ++ n) addApps
   as <- additionalLibs >>= follow
   let libs =
         S.filter
           (\a -> not $ S.member (takeFileName $ T.unpack a) ex)
-          (S.union ps as)
+          (S.unions $ ps : as : ads)
   callProcess "rm" ["-Rf", appDir]
   createDirectory appDir
   createDirectory $ appDir ++ "/bin"
-  callProcess
-    "cp"
-    [hd ++ "/.cabal/bin/" ++ appName, appDir ++ "/bin/" ++ appName]
-  strip $ appDir ++ "/bin/" ++ appName
+  mapM_
+    (\n -> callProcess "cp" [hd ++ "/.cabal/bin/" ++ n, appDir ++ "/bin/" ++ n])
+    (appName : addApps)
+  mapM_ (strip . (\n -> appDir ++ "/bin/" ++ n)) (appName : addApps)
   mapM_
     (\fp ->
        createDirectoryIfMissing True $ appDir ++ takeDirectory (T.unpack fp))
