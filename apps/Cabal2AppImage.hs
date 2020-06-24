@@ -11,6 +11,7 @@ import qualified Data.Text.IO          as T
 
 import           Control.Monad
 import           Control.Monad.Extra   (unfoldM)
+import           Control.Exception (try, IOException)
 
 import           System.Directory
 import           System.FilePath.Posix
@@ -26,7 +27,9 @@ addApps :: [String]
 addApps = ["helidecode"]
 
 strip :: String -> IO ()
-strip fp = callProcess "strip" [fp]
+strip fp = do
+  _ :: Either IOException () <- try (callProcess "strip" [fp])
+  return ()
 
 copyLib :: String -> String -> IO ()
 copyLib src dest = do
@@ -85,9 +88,15 @@ excludeList = do
 
 additionalLibs :: IO (Set T.Text)
 additionalLibs = do
-  l1 <- T.pack <$> readProcess "locate" ["librtlsdr.so"] []
-  l2 <- T.pack <$> readProcess "locate" ["librtlsdrSupport.so"] []
-  return . S.fromList $ cleanUp $ fmap T.strip (T.lines l1 ++ T.lines l2)
+  let libs =
+        [ "librtlsdr.so"
+        , "librtlsdrSupport.so"
+        , "libsdrplay_api.so"
+        , "libsdrPlaySupport.so"
+        ]
+      locate n = T.pack <$> readProcess "locate" [n] []
+  ls <- fmap T.lines <$> mapM locate libs
+  return . S.fromList $ cleanUp $ T.strip <$> concat ls
 
 desktopFile :: IO ()
 desktopFile = do
