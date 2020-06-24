@@ -118,14 +118,14 @@ Let's first check using [CubicSDR](https://cubicsdr.com/) if there are any signa
 
 ![ex1_1](images/ex1_1.png)
 
-We see a station on 92MHz. Bandwidth of the signal seems to be around 200kHz. Lets record some IQ samples
+We see a station on 92MHz. Bandwidth of the signal seems to be around 200kHz. Let's record some IQ samples
 (2 million sample = 10s of recording, DeNo means no demodulation - output will be CF32 IQ sample file):
 
 ```sh
 cabal v2-run -- soapy-sdr -n 2000000 -f 92.0e6 -b 200000 --demod "DeNo"
 ```
 
-Lets now inspect the output file (output.cf32) in [inspectrum](https://github.com/miek/inspectrum).
+Let's now inspect the output file (output.cf32) in [inspectrum](https://github.com/miek/inspectrum).
 
 ![ex1_2](images/ex1_2.png)
 
@@ -205,7 +205,7 @@ Capturing a slice of FM band at maximum samplerate (3.2MSPS) of RTL-SDR to a fil
 cabal v2-run -- soapy-sdr -n 192000000 -f 91.0e6 -s 3.2e6 --demod "DeNo" -o input
 ```
 
-I've tuned to 91MHz and we now that at 92MHz there a station. Lets mix down and resample
+I've tuned to 91MHz and we now that at 92MHz there a station. Let's mix down and resample
 192kHz wide slice of this part of the spectrum:
 
 ```sh
@@ -233,7 +233,7 @@ cabal v2-run -- soapy-sdr -n 200000 -f 434.388e6 -b 20000 -s 1.0e6 \
 #### Example 6
 
 Decoding FSK data from a helicopter, similarly to [this](http://www.windytan.com/2014/02/mystery-signal-from-helicopter.html) and [this](https://github.com/proto17/HelicopterDemod/wiki).
-First lets download the audio containing FSK signal from [youtube](https://www.youtube.com/watch?v=2MprHxarmOI) using [youtube-dl](https://youtube-dl.org/):
+First let's download the audio containing FSK signal from [youtube](https://www.youtube.com/watch?v=2MprHxarmOI) using [youtube-dl](https://youtube-dl.org/):
 
 ```sh
 youtube-dl -x --audio-format wav https://www.youtube.com/watch?v=2MprHxarmOI
@@ -251,7 +251,7 @@ In inspectrum we see the signal between 1.2kHz and 2.4kHz:
 
 ![ex6_1](images/ex6_1.png)
 
-Lets now try filter out and FM demodulate the signal:
+Let's now try filter out and FM demodulate the signal:
 
 ```sh
 cabal v2-run -- soapy-sdr --filename helicopter.wav -n 20000000000 -s 24000 \
