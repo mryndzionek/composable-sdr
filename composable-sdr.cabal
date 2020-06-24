@@ -66,7 +66,7 @@ executable cabal2appimage
 executable helidecode
   main-is:             HeliDecode.hs
   build-depends:       base ^>=4.12, bytestring, binary, split, megaparsec,
-                       replace-megaparsec, filepath
+                       replace-megaparsec, filepath, listsafe
   hs-source-dirs:      apps
   ghc-options:         -Wall -O2
   default-language:    Haskell2010

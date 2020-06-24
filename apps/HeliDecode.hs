@@ -1,10 +1,13 @@
 module Main where
 
+import           Prelude                    hiding (head,tail, (!!))
+
 import           Data.Binary.Get
 import           Data.Bits
 import qualified Data.ByteString.Lazy       as BL
 import           Data.Char                  (chr)
 import           Data.Either                (partitionEithers)
+import           Data.List.Safe
 import           Data.List.Split            (chunksOf)
 import           Data.Void
 import           Data.Word
@@ -97,7 +100,7 @@ decode bs = map (toByte . take 8) $ chunksOf 10 bs
         [0 ..]
 
 everyNth :: Int -> [b] -> [b]
-everyNth n = map head . chunksOf n
+everyNth n = concatMap head . chunksOf n
 
 toDeg :: Loc -> Float
 toDeg loc = _deg loc + (_min loc / 60.0) + (_sec loc / 3600)
@@ -121,7 +124,9 @@ distKm ca cb =
    in r * c
 
 clean :: [Coord] -> [Coord]
-clean cs = fmap snd $ filter (\(c1, c2) -> distKm c1 c2 < 0.1) $ zip (tail cs) cs
+clean cs = do
+  ts <- tail cs
+  fmap snd $ filter (\(c1, c2) -> distKm c1 c2 < 0.1) $ zip ts cs
 
 toKML :: FilePath -> [Coord] -> IO ()
 toKML fp cs = do
@@ -160,7 +165,7 @@ toOctave fp vs = do
 main :: IO ()
 main = do
   args <- getArgs
-  let fn = head args
+  fn <- head args
   bs <- BL.readFile fn
   let floats = runGet parseFloats bs
   let bits :: String =
