@@ -17,7 +17,7 @@ extra-source-files:  README.md
 library
   exposed-modules:     ComposableSDR
   build-depends:       base ^>=4.12, bytestring, mtl,
-                       streamly, fusion-plugin,
+                       streamly, fusion-plugin, filepath,
                        hsndfile, exceptions, storable-tuple, monad-control
   hs-source-dirs:      src
   include-dirs:        src
