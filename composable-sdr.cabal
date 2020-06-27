@@ -17,7 +17,7 @@ extra-source-files:  README.md
 library
   exposed-modules:     ComposableSDR
   build-depends:       base ^>=4.12, bytestring, mtl,
-                       streamly, fusion-plugin, filepath,
+                       streamly==0.7.2, fusion-plugin, filepath,
                        hsndfile, exceptions, storable-tuple, monad-control
   hs-source-dirs:      src
   include-dirs:        src
@@ -42,7 +42,7 @@ executable soapy-sdr
   main-is:             SoapySDR.hs
   build-depends:       base ^>=4.12, binary, directory,
                        containers, optparse-applicative,
-                       streamly, fusion-plugin,
+                       streamly==0.7.2, fusion-plugin,
                        composable-sdr
   hs-source-dirs:      apps
   ghc-options:         -Wall -O2
