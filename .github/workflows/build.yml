@@ -59,6 +59,25 @@ jobs:
         sudo make install
         cd ../..
 
+        wget https://www.sdrplay.com/software/SDRplay_RSP_API-Linux-3.07.1.run
+        chmod +x SDRplay_RSP_API-Linux-3.07.1.run
+        timeout 1s ./SDRplay_RSP_API-Linux-3.07.1.run --target sdr_play_install || echo ""
+        cd sdr_play_install
+        sed -i '6,20d' install_lib.sh
+        sed -i '145,153d' install_lib.sh
+        ./install_lib.sh
+        cd ../..
+
+        git clone https://github.com/SDRplay/SoapySDRPlay.git
+        cd SoapySDRPlay
+        git checkout 33810156033f3864a64149406da15dc1476a553f
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE ..
+        make -j
+        sudo make install
+        cd ../..
+
         wget https://github.com/jgaeddert/liquid-dsp/archive/v$LIQUIDDSP_VER.tar.gz
         tar -zxvf v$LIQUIDDSP_VER.tar.gz
         cd liquid-dsp-$LIQUIDDSP_VER
