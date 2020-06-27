@@ -1,6 +1,6 @@
 module Main where
 
-import           Prelude               hiding (head, (!!))
+import           Prelude               hiding (head, tail, (!!))
 
 import           Data.List.Safe
 import           Data.Maybe
@@ -8,9 +8,7 @@ import           Data.Set              (Set)
 import qualified Data.Set              as S
 import qualified Data.Text             as T
 import qualified Data.Text.IO          as T
-
-import           Control.Monad
-import           Control.Monad.Extra   (unfoldM)
+import           Data.Tree
 
 import           System.Directory
 import           System.FilePath.Posix
@@ -47,11 +45,11 @@ cleanUp =
        let s = T.unpack a
         in isAbsolute s || not (null s))
 
-ldd :: String -> IO (Set T.Text)
+ldd :: T.Text -> IO [T.Text]
 ldd execName = do
-  out <- T.pack <$> readProcess "ldd" [execName] []
+  out <- T.pack <$> readProcess "ldd" [T.unpack execName] []
   let p = entry . T.split (== ' ') . T.strip <$> T.lines out
-  return $ S.fromList $ cleanUp $ fromJust <$> filter isJust p
+  return $ cleanUp $ fromJust <$> filter isJust p
   where
     entry ts = do
       name <- ts !! (1 :: Int)
@@ -59,35 +57,26 @@ ldd execName = do
         then ts !! (2 :: Int)
         else Nothing
 
-expand :: Set T.Text -> IO (Set T.Text)
-expand = foldM go S.empty
+deps :: T.Text -> IO (Tree T.Text)
+deps execName = unfoldTreeM_BF go execName
   where
-    go s l = S.union s <$> ldd (T.unpack l)
+    go n = do
+      ts <- ldd n
+      return (n, ts)
 
-follow :: Set T.Text -> IO (Set T.Text)
-follow s = do
-  s' <- S.unions <$> unfoldM go s
-  return (S.union s s')
-  where
-    go t = do
-      t' <- expand t
-      if S.null t'
-        then return Nothing
-        else return (Just (t', t'))
-
-excludeList :: IO (Set String)
+excludeList :: IO (Set T.Text)
 excludeList = do
   el <- fmap T.strip . T.lines . T.pack <$> readFile "excludelist.txt"
   return $
     S.fromList $
-    T.unpack . fromJust . head . T.splitOn " " <$>
+    fromJust . head . T.splitOn " " <$>
     filter (not . (\a -> T.isPrefixOf "#" a || T.null a)) el
 
-additionalLibs :: IO (Set T.Text)
+additionalLibs :: IO [T.Text]
 additionalLibs = do
   l1 <- T.pack <$> readProcess "locate" ["librtlsdr.so"] []
   l2 <- T.pack <$> readProcess "locate" ["librtlsdrSupport.so"] []
-  return . S.fromList $ cleanUp $ fmap T.strip (T.lines l1 ++ T.lines l2)
+  return . cleanUp $ fmap T.strip (T.lines l1 ++ T.lines l2)
 
 desktopFile :: IO ()
 desktopFile = do
@@ -96,7 +85,7 @@ desktopFile = do
       [ "[Desktop Entry]"
       , "Type=Application"
       , "Name=Soapy SDR"
-      , "Comment=I/Q recorder and processor using SoapySDR as backend" 
+      , "Comment=I/Q recorder and processor using SoapySDR as backend"
       , "Exec=" ++ appName
       , "Icon=" ++ appName
       , "Categories=Utility;"
@@ -117,17 +106,28 @@ appRunFile ls = do
     (T.replace "%modules%" ("${HERE}" `T.append` md) f)
   callProcess "chmod" ["+x", appDir ++ "/AppRun"]
 
+prune :: Set T.Text -> Tree T.Text -> Tree T.Text
+prune e t = unfoldTree build t
+  where
+    build t' =
+      let xs =
+            filter
+              (\a ->
+                 S.notMember (T.pack . takeFileName . T.unpack $ rootLabel a) e) $
+            subForest t'
+       in (rootLabel t', xs)
+
 main :: IO ()
 main = do
   hd <- getHomeDirectory
   ex <- excludeList
-  ps <- ldd (hd ++ "/.cabal/bin/" ++ appName) >>= follow
-  ads <- mapM (ldd >=> follow) $ fmap (\n -> hd ++ "/.cabal/bin/" ++ n) addApps
-  as <- additionalLibs >>= follow
-  let libs =
-        S.filter
-          (\a -> not $ S.member (takeFileName $ T.unpack a) ex)
-          (S.unions $ ps : as : ads)
+  ps <- deps (T.pack $ hd ++ "/.cabal/bin/" ++ appName)
+  ads <- mapM deps $ fmap (T.pack . \n -> hd ++ "/.cabal/bin/" ++ n) addApps
+  as <- additionalLibs >>= mapM deps
+  let ts = fmap (prune ex) $ ps : as ++ ads
+  mapM_ (putStrLn . drawTree . fmap T.unpack) ts
+  let libs = S.fromList . concat $ fmap flatten ts
+  print libs
   callProcess "rm" ["-Rf", appDir]
   createDirectory appDir
   createDirectory $ appDir ++ "/bin"
