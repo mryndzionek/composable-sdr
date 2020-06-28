@@ -44,7 +44,7 @@ jobs:
         cd librtlsdr-$LIBRTLSDR_VER
         mkdir build
         cd build
-        cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE ..
+        cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DDETACH_KERNEL_DRIVER=ON ..
         make -j
         sudo make install
         cd ../..
