@@ -16,7 +16,7 @@ extra-source-files:  README.md
 
 library
   exposed-modules:     ComposableSDR
-  build-depends:       base ^>=4.12, bytestring, mtl,
+  build-depends:       base >=4.13 && <4.14, bytestring, mtl,
                        streamly==0.7.2, fusion-plugin, filepath,
                        hsndfile, exceptions, storable-tuple, monad-control
   hs-source-dirs:      src
@@ -40,7 +40,7 @@ library
 
 executable soapy-sdr
   main-is:             SoapySDR.hs
-  build-depends:       base ^>=4.12, binary, directory,
+  build-depends:       base >=4.13 && <4.14, binary, directory,
                        containers, optparse-applicative,
                        streamly==0.7.2, fusion-plugin,
                        composable-sdr
@@ -55,7 +55,7 @@ executable soapy-sdr
 
 executable cabal2appimage
   main-is:             Cabal2AppImage.hs
-  build-depends:       base ^>=4.12, directory, process, monad-extras,
+  build-depends:       base >=4.13 && <4.14, directory, process, monad-extras,
                        containers, optparse-applicative, text, listsafe,
                        filepath
   hs-source-dirs:      apps
@@ -65,7 +65,7 @@ executable cabal2appimage
 
 executable helidecode
   main-is:             HeliDecode.hs
-  build-depends:       base ^>=4.12, bytestring, binary, split, megaparsec,
+  build-depends:       base >=4.13 && <4.14, bytestring, binary, split, megaparsec,
                        replace-megaparsec, filepath, listsafe
   hs-source-dirs:      apps
   ghc-options:         -Wall -O2
