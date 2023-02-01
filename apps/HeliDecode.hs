@@ -57,10 +57,10 @@ parseCoord =
   Coord <$> between "AN " crlf parseLoc <*> between "BW " crlf parseLoc
 
 parseString ::
-     (Monad m, Stream s, ShowErrorComponent e) => s -> Parsec e s (m a) -> m a
+  (MonadFail m, VisualStream s, TraversableStream s, ShowErrorComponent e) => s -> Parsec e s (m a) -> m a
 parseString s p =
   case runParser p "" s of
-    Left e  -> fail (errorBundlePretty e)
+    Left e -> fail (errorBundlePretty e)
     Right a -> a
 
 parseCoords :: [String] -> [Coord]

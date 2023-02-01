@@ -9,7 +9,7 @@ jobs:
 
     env:
       APP_NAME: soapy-sdr
-      GHC_VER: 8.6.5
+      GHC_VER: 8.8.4
       CABAL_VER: 3.2
       APPIMGTOOL_VER: 12
       LIQUIDDSP_VER: 1.3.2

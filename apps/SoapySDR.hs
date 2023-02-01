@@ -4,7 +4,6 @@ module Main where
 
 import qualified Data.Map            as M
 import           Data.Maybe          (mapMaybe)
-import           Data.Semigroup      ((<>))
 
 import           Control.Category    (Category (..), id)
 import           Control.Exception   (fromException, try)
